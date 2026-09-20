@@ -14,8 +14,18 @@ package web
 
 import "embed"
 
+// templateFS holds every page template, compiled into the binary at build
+// time rather than read from disk at runtime. That is what lets the
+// deployed artifact be a single file, with no templates/ directory shipped
+// alongside it. loadTemplates (templates.go) parses these once at startup.
+//
 //go:embed templates/*.html
 var templateFS embed.FS
 
+// staticFS holds the stylesheet and the one small JavaScript file, served
+// directly out of the binary by NewRouter (router.go). Same reasoning as
+// templateFS above: nothing to copy at deploy time, nothing to mount, and
+// no CDN to configure for an app this size.
+//
 //go:embed static/*
 var staticFS embed.FS

@@ -10,6 +10,28 @@ cd /d "%~dp0"
 set APP_URL=http://localhost:8080
 set HEALTH_URL=%APP_URL%/healthz
 
+REM Preflight. Without this, a missing tool surfaces several steps in as a
+REM bare "'go' is not recognized...", which says nothing about what to
+REM install. Checking up front costs nothing and the message is actionable.
+where go >nul 2>&1
+if errorlevel 1 (
+    echo Go is not on your PATH.
+    echo Install Go 1.24+ from https://go.dev/dl/, then open a NEW terminal so PATH updates.
+    exit /b 1
+)
+where docker >nul 2>&1
+if errorlevel 1 (
+    echo Docker is not on your PATH.
+    echo Install Docker Desktop from https://docs.docker.com/get-docker/ - it runs Postgres and Mailhog.
+    exit /b 1
+)
+where curl >nul 2>&1
+if errorlevel 1 (
+    echo curl is not on your PATH.
+    echo It ships with Windows 10 1803 and later as C:\Windows\System32\curl.exe - if it's missing, get it from https://curl.se/windows/
+    exit /b 1
+)
+
 echo [1/3] Starting Postgres and Mailhog...
 docker compose up -d --wait postgres mailhog
 if errorlevel 1 (

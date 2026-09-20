@@ -24,6 +24,10 @@ type Worker struct {
 	logger       *slog.Logger
 }
 
+// NewWorker builds the single Worker that serves every validation run. It
+// is called once, from cmd/server/main.go, and the result is handed to
+// internal/web's Handlers — there is no per-run construction, because a
+// Worker holds no per-run state (see the type's doc comment).
 func NewWorker(st *store.Store, maxMRFBytes int64, fetchTimeout time.Duration, logger *slog.Logger) *Worker {
 	return &Worker{store: st, maxMRFBytes: maxMRFBytes, fetchTimeout: fetchTimeout, logger: logger}
 }
@@ -44,6 +48,17 @@ func (w *Worker) RunAsync(hospital store.Hospital, runID string) {
 	go w.run(hospital, runID)
 }
 
+// run is the body of one validation job, executed on its own goroutine by
+// RunAsync: mark the run started, fetch and stream the hospital's MRF
+// (internal/mrf), score it against the CY2026 checklist (internal/rules),
+// translate that report into the store's row types, and persist the whole
+// thing in one transaction.
+//
+// Every failure path writes something to the database rather than only
+// logging it. The dashboard's sole window into this goroutine is the run's
+// status column, so a job that died quietly would leave the page showing
+// "Checking..." forever — which is exactly what happened before the
+// save-failure branch at the bottom of this function existed.
 func (w *Worker) run(hospital store.Hospital, runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), w.fetchTimeout)
 	defer cancel()

@@ -10,6 +10,11 @@ import (
 	"github.com/bobbylon127/mrfsentinel/internal/auth"
 )
 
+// loginPageData backs login.html. Error is non-empty only when the page is
+// being re-rendered after a failed attempt — a malformed email address, or
+// a magic link that was expired or already used — so that the template can
+// show the message inline instead of bouncing the user to a separate error
+// page.
 type loginPageData struct {
 	baseData
 	Error string

@@ -47,12 +47,19 @@ func NewStore(db *sql.DB) *Store {
 // never a mismatch between what a struct field is named and what a query
 // actually selects.
 
+// User is a signed-in account, which in this app is nothing more than a
+// verified email address — there is no password hash, profile, or role
+// here, because magic-link auth needs none of them (see internal/auth).
 type User struct {
 	ID        string
 	Email     string
 	CreatedAt time.Time
 }
 
+// Hospital is one tracked hospital: a display name and the public URL of
+// its published MRF, owned by the user who added it. OwnerUserID is the
+// only access control this app has — every query that reads a hospital or
+// anything beneath it filters on it (see GetHospital and GetRunReport).
 type Hospital struct {
 	ID          string
 	OwnerUserID string
@@ -65,6 +72,11 @@ type Hospital struct {
 // migrations/0001_init.sql.
 type RunStatus string
 
+// A run's lifecycle: created pending, flipped to running when the worker
+// picks it up, and ending as either succeeded (the file was checked,
+// whatever the checklist concluded) or failed (the file could not be
+// fetched or saved at all). Note that "succeeded" says the check ran, not
+// that the hospital passed it — that answer is ValidationRun.OverallPassed.
 const (
 	RunPending   RunStatus = "pending"
 	RunRunning   RunStatus = "running"
@@ -72,6 +84,11 @@ const (
 	RunFailed    RunStatus = "failed"
 )
 
+// ValidationRun is one check of one hospital's MRF, from the moment it is
+// queued to whatever it eventually concluded. The pointer fields are the
+// ones that are genuinely unknown until it finishes, rather than zero: see
+// the bug described in ARCHITECTURE.md for what happened when a template
+// treated a non-nil *bool as "passed" without dereferencing it.
 type ValidationRun struct {
 	ID            string
 	HospitalID    string
@@ -85,6 +102,9 @@ type ValidationRun struct {
 	FinishedAt    *time.Time
 }
 
+// HospitalCheck is one stored hospital-level checklist result — the
+// persisted form of rules.CheckResult, kept as a separate type so the
+// database schema and the checklist engine can change independently.
 type HospitalCheck struct {
 	RuleID      string
 	Description string
@@ -92,6 +112,10 @@ type HospitalCheck struct {
 	Detail      string
 }
 
+// ItemCheck is one stored item-level rule's tally across the whole file —
+// the persisted form of rules.ItemRuleSummary. SampleFailures round-trips
+// through a Postgres text[] column; see SaveRunResult for the nil-slice
+// trap that lives on that boundary.
 type ItemCheck struct {
 	RuleID         string
 	Description    string

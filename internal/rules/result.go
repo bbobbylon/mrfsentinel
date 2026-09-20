@@ -36,6 +36,12 @@ type ItemRuleSummary struct {
 	SampleFailures []string
 }
 
+// sampleFailureCap bounds how many example failures one rule records. The
+// tally (RowsFailed) stays exact no matter how many there are; only the
+// stored examples stop accumulating. Twenty is enough for a compliance
+// officer to recognize the pattern behind a failing rule, while keeping a
+// report on a file that is 90% non-compliant from becoming as unmanageable
+// as the file itself.
 const sampleFailureCap = 20
 
 // Passed reports whether every row that was checked satisfied this rule.
@@ -54,6 +60,11 @@ func (s ItemRuleSummary) ComplianceRate() float64 {
 	return float64(s.RowsChecked-s.RowsFailed) / float64(s.RowsChecked)
 }
 
+// recordFailure counts one failing row and keeps its pointer as an example
+// while there is room under sampleFailureCap. Pointer receiver, unlike
+// Passed and ComplianceRate above, because this is the one method here that
+// mutates — Evaluate calls it through the summaries slice it is
+// accumulating into.
 func (s *ItemRuleSummary) recordFailure(pointer string) {
 	s.RowsFailed++
 	if len(s.SampleFailures) < sampleFailureCap {
@@ -103,6 +114,12 @@ func (r Report) OverallPassed() bool {
 	return true
 }
 
+// checkNonEmpty builds the CheckResult for the several hospital-level rules
+// that amount to "this field has to be filled in," echoing the value back
+// in Detail on success so the report shows what was found rather than only
+// that something was. Rules needing more than presence — licensure, NPI
+// shape, attestation confirmation — have their own functions in
+// checklist.go.
 func checkNonEmpty(id, description, value string) CheckResult {
 	if value == "" {
 		return CheckResult{RuleID: id, Description: description, Passed: false, Detail: "not present in the file"}

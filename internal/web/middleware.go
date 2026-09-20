@@ -18,6 +18,15 @@ import (
 // stand-in.
 type userContextKey struct{}
 
+// userFromContext reads back the store.User that requireAuth attached to a
+// request's context, reporting false if there is none.
+//
+// Nothing calls this today. requireAuth also passes the user to its wrapped
+// handler as an ordinary argument, which is simpler and checked by the
+// compiler, so every handler in this package takes it that way instead.
+// This is the accessor to use from code that can only see an http.Request
+// and has no such argument; if no such caller has appeared by the time the
+// next handler is written, it is dead code worth deleting.
 func userFromContext(ctx context.Context) (store.User, bool) {
 	u, ok := ctx.Value(userContextKey{}).(store.User)
 	return u, ok

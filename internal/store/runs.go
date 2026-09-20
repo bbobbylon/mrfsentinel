@@ -181,6 +181,11 @@ func (s *Store) GetRunReport(ctx context.Context, runID, ownerUserID string) (Ru
 	return RunReport{Run: r, HospitalChecks: hospitalChecks, ItemChecks: itemChecks}, nil
 }
 
+// hospitalChecksForRun loads a run's hospital-level results in insertion
+// order, so the report page lists them in the same order the checklist
+// defines them (see rules.hospitalChecks) rather than an arbitrary one.
+// Unexported and unscoped by owner on purpose: GetRunReport is the only
+// caller, and it has already proved ownership of the run before calling.
 func (s *Store) hospitalChecksForRun(ctx context.Context, runID string) ([]HospitalCheck, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rule_id, description, passed, detail
@@ -205,6 +210,10 @@ func (s *Store) hospitalChecksForRun(ctx context.Context, runID string) ([]Hospi
 	return out, rows.Err()
 }
 
+// itemChecksForRun loads a run's item-level tallies, ordered and scoped
+// exactly as hospitalChecksForRun above. pq.Array is what unpacks the
+// sample_failures text[] column back into a Go slice — database/sql has no
+// native array support, so the driver has to do it.
 func (s *Store) itemChecksForRun(ctx context.Context, runID string) ([]ItemCheck, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rule_id, description, rows_checked, rows_failed, sample_failures

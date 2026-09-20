@@ -56,6 +56,15 @@ type sizeCappedReader struct {
 	read int64
 }
 
+// Read passes through to the wrapped reader until max bytes have been
+// consumed in total, then fails every subsequent call. It also trims the
+// caller's buffer so the cap is never overshot within a single Read, which
+// matters because the underlying reader here is a network socket delivering
+// whatever happens to have arrived.
+//
+// Note this reports an error rather than a clean io.EOF: a truncated file
+// silently treated as a complete one would produce a confidently wrong
+// compliance report, which is worse than no report at all.
 func (s *sizeCappedReader) Read(p []byte) (int, error) {
 	if s.read >= s.max {
 		return 0, fmt.Errorf("mrf: file exceeds the configured %d byte limit (MAX_MRF_MEBIBYTES)", s.max)

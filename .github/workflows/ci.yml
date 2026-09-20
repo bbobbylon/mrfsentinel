@@ -11,6 +11,19 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: this workflow only ever reads the repository. It pushes
+# nothing and comments nowhere, so it has no reason to hold a writable
+# token. Deployment lives in cd.yml, which asks for exactly what it needs.
+permissions:
+  contents: read
+
+# Superseded runs on the same branch are pointless — only the newest commit's
+# result matters for a merge decision. Cancelling them keeps the queue short
+# and stops an older run from reporting a stale red after a fix is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -33,24 +46,44 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # go-version-file rather than a hardcoded "1.24": the toolchain is then
+      # whatever go.mod itself requires (currently 1.24.7), so bumping the Go
+      # version is a one-line change in go.mod instead of two edits that can
+      # drift apart. setup-go pins GOTOOLCHAIN=local, so a runner Go older
+      # than go.mod's requirement is a hard failure rather than a silent
+      # download — which is exactly why these two should never disagree.
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.24"
+          go-version-file: go.mod
 
       - name: Download dependencies
         run: go mod download
 
+      # This step failed on the very first push to this repo: lib/pq was
+      # marked "// indirect" in go.mod despite being imported directly (the
+      # blank import in internal/store/db.go still counts as a direct
+      # dependency), so `go mod tidy` rewrote the line and the diff check
+      # tripped. Hence the explanatory message — a bare diff is a puzzle the
+      # next person has to re-solve.
       - name: Verify go.mod/go.sum are tidy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          if ! git diff --exit-code go.mod go.sum; then
+            echo
+            echo "::error::go.mod/go.sum are not tidy — run 'go mod tidy' locally and commit the result."
+            echo "The diff above is exactly what 'go mod tidy' changed."
+            echo "Common cause: a dependency marked '// indirect' that this module actually imports"
+            echo "directly (a blank '_' import counts as direct)."
+            exit 1
+          fi
 
       - name: gofmt check
         run: |
           UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
-            echo "The following files are not gofmt-formatted:"
+            echo "::error::The following files are not gofmt-formatted:"
             echo "$UNFORMATTED"
+            echo "Run 'gofmt -w .' and commit the result."
             exit 1
           fi
 

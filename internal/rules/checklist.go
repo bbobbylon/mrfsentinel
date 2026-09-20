@@ -30,6 +30,12 @@ func hospitalChecks(m mrf.Metadata) []CheckResult {
 	}
 }
 
+// checkLicense scores whether the file carries hospital licensure
+// information. It fails only when both the number and the state are
+// missing: CMS permits a hospital that genuinely holds no license number to
+// omit it, so the absence of that one field is not by itself a violation,
+// while a file carrying neither field at all has clearly not addressed the
+// requirement.
 func checkLicense(m mrf.Metadata) CheckResult {
 	if m.LicenseNumber == "" && m.LicenseState == "" {
 		return CheckResult{
@@ -82,6 +88,12 @@ func checkType2NPI(m mrf.Metadata) CheckResult {
 	}
 }
 
+// checkAttestationConfirmed scores the CY2026 attestation, distinguishing
+// two failures that need different fixes: no attestation block at all (the
+// file predates the CY2026 shape and needs the field added), versus a block
+// that exists but was never affirmatively confirmed (the field is there and
+// someone still has to sign it). Both are reported as failures, with the
+// Detail text saying which — that distinction is the actionable part.
 func checkAttestationConfirmed(m mrf.Metadata) CheckResult {
 	if !m.AttestationFieldFound {
 		return CheckResult{
@@ -107,6 +119,10 @@ func checkAttestationConfirmed(m mrf.Metadata) CheckResult {
 	}
 }
 
+// isTenDigits reports whether s is exactly ten ASCII digits, the documented
+// shape of an NPI. Written out rather than done with a regexp because it
+// runs per NPI on every file and reads no worse; note it deliberately
+// rejects non-ASCII digits, which strconv.Atoi would otherwise accept.
 func isTenDigits(s string) bool {
 	if len(s) != 10 {
 		return false
@@ -131,6 +147,12 @@ type itemRuleDef struct {
 	pointer     func(mrf.Row) string
 }
 
+// defaultPointer renders the human-readable "here is where to look"
+// breadcrumb recorded for a failing row — item number plus description. It
+// is used by any rule in itemRules that does not supply its own pointer
+// function, which today is all of them; the per-rule hook exists so a rule
+// that fails for a field-specific reason can say so without changing how
+// every other rule reports.
 func defaultPointer(r mrf.Row) string {
 	desc := r.Description
 	if desc == "" {
@@ -139,6 +161,12 @@ func defaultPointer(r mrf.Row) string {
 	return fmt.Sprintf("item #%d: %s", r.LineNumber, desc)
 }
 
+// itemRules is the item-level checklist itself: every rule scored against
+// every row of the file. The first six are the long-standing 45 CFR 180
+// requirements; the last is new for CY2026. Adding a rule to this table is
+// the entire change needed to add it to the product — Evaluate, the report
+// types, the database schema and the report page are all driven by whatever
+// is in here.
 var itemRules = []itemRuleDef{
 	{
 		id:          "ITEM-DESCRIPTION",

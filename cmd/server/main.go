@@ -26,6 +26,13 @@ import (
 	"github.com/bobbylon127/mrfsentinel/internal/web"
 )
 
+// main is the process entry point, and deliberately does almost nothing:
+// build a logger, hand off to run, and translate a returned error into a
+// nonzero exit status. All the real startup work lives in run so that its
+// deferred cleanup (closing the database pool, cancelling the startup
+// context) actually executes — os.Exit skips deferred functions entirely,
+// so calling it from inside the wiring below would silently leak the very
+// things those defers exist to release.
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
@@ -35,6 +42,14 @@ func main() {
 	}
 }
 
+// run builds this app's entire dependency graph by hand, in the order each
+// piece needs the one before it — config, database pool, schema
+// migrations, store, mailer, background worker, handlers, router — and
+// then serves until a shutdown signal arrives or the listener fails.
+//
+// It returns an error instead of exiting so that main owns the exit status,
+// and so that every defer registered here still runs on the way out; see
+// main's comment for why that distinction matters.
 func run(logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {

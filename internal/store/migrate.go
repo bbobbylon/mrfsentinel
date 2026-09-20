@@ -17,6 +17,11 @@ import (
 	"sort"
 )
 
+// migrationFS holds the schema migrations, compiled into the binary so a
+// deployed container carries its own schema and needs no migrations/
+// directory mounted beside it — the same reasoning as internal/web's
+// embedded templates. Migrate below reads them from here.
+//
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
@@ -72,6 +77,10 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// migrationAlreadyApplied reports whether a migration file has been
+// recorded in schema_migrations, which is what makes Migrate idempotent and
+// therefore safe to run on every single startup (see cmd/server/main.go,
+// which does exactly that).
 func migrationAlreadyApplied(ctx context.Context, db *sql.DB, name string) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx,
@@ -83,6 +92,15 @@ func migrationAlreadyApplied(ctx context.Context, db *sql.DB, name string) (bool
 	return exists, nil
 }
 
+// applyMigration runs one migration file and records it as applied, both
+// inside a single transaction. Coupling those two writes is the point: if
+// the schema change committed but the bookkeeping row did not, the next
+// startup would try to apply it again against a database that already has
+// it, and fail on something like a duplicate column.
+//
+// Postgres supports transactional DDL, which is what makes this possible —
+// the same migration strategy would not be safe on MySQL, where a DDL
+// statement commits implicitly.
 func applyMigration(ctx context.Context, db *sql.DB, name string) error {
 	sqlBytes, err := migrationFS.ReadFile("migrations/" + name)
 	if err != nil {

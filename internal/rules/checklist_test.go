@@ -17,8 +17,17 @@ type fakeSource struct {
 	i      int
 }
 
-func (f *fakeSource) Format() mrf.Format     { return f.format }
+// Format returns whichever format the test declared; Evaluate only copies
+// it into the report, so nothing here depends on it being truthful.
+func (f *fakeSource) Format() mrf.Format { return f.format }
+
+// Metadata returns the hand-built hospital metadata under test, which is
+// what drives every hospital-level check.
 func (f *fakeSource) Metadata() mrf.Metadata { return f.meta }
+
+// Next walks the canned row slice once and then reports mrf.ErrDone,
+// mimicking a real Source's single-pass contract — nothing rewinds, so a
+// fakeSource is good for exactly one Evaluate call.
 func (f *fakeSource) Next() (mrf.Row, error) {
 	if f.i >= len(f.rows) {
 		return mrf.Row{}, mrf.ErrDone
@@ -28,8 +37,15 @@ func (f *fakeSource) Next() (mrf.Row, error) {
 	return row, nil
 }
 
+// ptr takes the address of a float64 literal, which Go does not allow
+// inline. Charge fields are pointers throughout mrf.Row so that absent
+// stays distinguishable from zero, and this keeps the fixtures below
+// readable in spite of that.
 func ptr(f float64) *float64 { return &f }
-func iptr(n int) *int        { return &n }
+
+// iptr is ptr for the one int-valued field the checklist reads, CY2026's
+// allowed-amount count.
+func iptr(n int) *int { return &n }
 
 // fullyCompliantRow satisfies every item-level rule in the checklist.
 func fullyCompliantRow(n int64) mrf.Row {
@@ -50,6 +66,11 @@ func fullyCompliantRow(n int64) mrf.Row {
 	}
 }
 
+// TestEvaluate_FullyCompliantFile is the positive case: metadata satisfying
+// every hospital-level rule, and rows satisfying every item-level rule,
+// must produce OverallPassed. It guards against the failure mode where a
+// rule is accidentally impossible to satisfy — which a suite made only of
+// negative cases would happily report as working.
 func TestEvaluate_FullyCompliantFile(t *testing.T) {
 	src := &fakeSource{
 		format: mrf.FormatJSON,
@@ -81,6 +102,12 @@ func TestEvaluate_FullyCompliantFile(t *testing.T) {
 	}
 }
 
+// TestEvaluate_FlagsMissingAttestationAndPercentiles is the case this
+// product exists for: a file that was perfectly compliant before CY2026 and
+// is not any more. It asserts the specific rules that must fail (NPI,
+// attestation, percentiles) rather than only that something failed, and
+// checks the tally and the sampled failure alongside — the numbers a
+// compliance officer actually acts on.
 func TestEvaluate_FlagsMissingAttestationAndPercentiles(t *testing.T) {
 	src := &fakeSource{
 		format: mrf.FormatCSVTall,
@@ -144,6 +171,11 @@ func TestEvaluate_FlagsMissingAttestationAndPercentiles(t *testing.T) {
 	}
 }
 
+// TestEvaluate_PartialResultsOnParseError checks that a file which breaks
+// partway through still yields everything read up to that point, with the
+// error recorded rather than thrown away. On a multi-gigabyte file that
+// went bad at row 400,000, a partial report is far more useful than none —
+// see rules.Report.ParseErr.
 func TestEvaluate_PartialResultsOnParseError(t *testing.T) {
 	src := &partialFailSource{
 		meta:      mrf.Metadata{HospitalName: "Broken File Hospital"},
@@ -173,8 +205,18 @@ type partialFailSource struct {
 	i         int
 }
 
-func (f *partialFailSource) Format() mrf.Format     { return mrf.FormatCSVTall }
+// Format is fixed here; this fake exists to exercise the failure path, not
+// any format-specific behavior.
+func (f *partialFailSource) Format() mrf.Format { return mrf.FormatCSVTall }
+
+// Metadata returns the test's hospital metadata, unaffected by the row
+// failure this source simulates.
 func (f *partialFailSource) Metadata() mrf.Metadata { return f.meta }
+
+// Next hands back compliant rows until failAfter is reached and then
+// returns a *mrf.ParseError — deliberately not mrf.ErrDone, since the whole
+// point is to distinguish "the file ended" from "the file stopped making
+// sense".
 func (f *partialFailSource) Next() (mrf.Row, error) {
 	if f.i >= f.failAfter {
 		return mrf.Row{}, &mrf.ParseError{Format: mrf.FormatCSVTall, Line: int64(f.i + 4), Err: errCorruptRow}
@@ -183,8 +225,14 @@ func (f *partialFailSource) Next() (mrf.Row, error) {
 	return fullyCompliantRow(int64(f.i)), nil
 }
 
+// errCorruptRow is the stand-in cause wrapped inside the simulated parse
+// failure above.
 var errCorruptRow = errStr("simulated corrupt row")
 
+// errStr is a minimal error implementation, used instead of errors.New so
+// the sentinel above can be declared as a plain constant-like value without
+// pulling errors into this test file for one line.
 type errStr string
 
+// Error satisfies the error interface with the string's own contents.
 func (e errStr) Error() string { return string(e) }

@@ -8,11 +8,19 @@ import (
 	"github.com/bobbylon127/mrfsentinel/internal/store"
 )
 
+// hospitalRow is one line of the dashboard table: a tracked hospital plus
+// the outcome of its most recent check, if it has ever been checked.
+// store.Hospital is embedded rather than copied field by field so
+// dashboard.html can reference .Name and .MRFURL directly, through Go
+// template's field promotion.
 type hospitalRow struct {
 	store.Hospital
 	LatestRun *store.ValidationRun // nil if this hospital has never been checked
 }
 
+// dashboardPageData backs dashboard.html. Error is set only by
+// renderDashboardError, when the "add a hospital" form came back with
+// something this app cannot accept.
 type dashboardPageData struct {
 	baseData
 	Hospitals []hospitalRow
@@ -87,6 +95,14 @@ func (h *Handlers) CreateHospital(w http.ResponseWriter, r *http.Request, user s
 	http.Redirect(w, r, "/hospitals/"+hospital.ID, http.StatusSeeOther)
 }
 
+// renderDashboardError re-renders the dashboard with a validation message
+// attached, for a rejected "add a hospital" submission. It answers 422
+// rather than redirecting so the officer's own typed-in values are still on
+// screen to correct — a redirect would discard them.
+//
+// The error from re-listing hospitals is deliberately ignored: this is
+// already the error path, and showing the intended message above an empty
+// table is more useful than replacing it with a second, vaguer failure.
 func (h *Handlers) renderDashboardError(w http.ResponseWriter, r *http.Request, user store.User, message string) {
 	hospitals, _ := h.store.ListHospitalsByOwner(r.Context(), user.ID)
 	rows := make([]hospitalRow, len(hospitals))
@@ -96,6 +112,9 @@ func (h *Handlers) renderDashboardError(w http.ResponseWriter, r *http.Request, 
 	h.tmpl.render(w, http.StatusUnprocessableEntity, "dashboard.html", dashboardPageData{baseData: authedData(user), Hospitals: rows, Error: message})
 }
 
+// hospitalPageData backs hospital.html: one hospital, plus its full run
+// history newest-first, which is what the "has this file gotten better
+// since last month" question actually needs.
 type hospitalPageData struct {
 	baseData
 	Hospital store.Hospital
@@ -142,12 +161,17 @@ func (h *Handlers) TriggerRun(w http.ResponseWriter, r *http.Request, user store
 	http.Redirect(w, r, "/runs/"+run.ID, http.StatusSeeOther)
 }
 
+// itemCheckView is one item-level rule as the report page needs it: the
+// stored tally, plus the two derived values a template cannot work out for
+// itself. html/template has no arithmetic, so the division behind
+// ComplianceRate has to happen here in Go.
 type itemCheckView struct {
 	store.ItemCheck
 	ComplianceRate float64
 	Passed         bool
 }
 
+// runPageData backs run.html, the full compliance report for a single run.
 type runPageData struct {
 	baseData
 	Report   store.RunReport
@@ -201,6 +225,12 @@ func (h *Handlers) RunStatus(w http.ResponseWriter, r *http.Request, user store.
 	})
 }
 
+// complianceRate is the share of checked rows that satisfied one rule, from
+// 0.0 to 1.0, guarding the zero-rows case that would otherwise divide by
+// zero. It mirrors rules.ItemRuleSummary.ComplianceRate: the same
+// arithmetic, applied to the stored row type after a round trip through the
+// database, since store.ItemCheck is a separate type from the in-memory
+// summary that produced it.
 func complianceRate(c store.ItemCheck) float64 {
 	if c.RowsChecked == 0 {
 		return 0

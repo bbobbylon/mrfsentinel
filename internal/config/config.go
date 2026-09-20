@@ -100,6 +100,11 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// getEnv reads a string setting, treating both "unset" and "set but empty"
+// as absent. That second case is not hypothetical: a Docker Compose file or
+// an ECS task definition that declares a variable without giving it a value
+// passes it through as "", and accepting that literally would override the
+// intended default with nothing.
 func getEnv(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
@@ -107,6 +112,11 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// getEnvInt is getEnv for integer settings. A variable that is present but
+// unparseable returns an error rather than falling back to the default: a
+// typo'd MAX_MRF_MEBIBYTES should stop the process at startup with a clear
+// message, not quietly run with a different limit than whoever set it
+// intended. Load turns that error into a failed boot.
 func getEnvInt(key string, fallback int) (int, error) {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {

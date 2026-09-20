@@ -9,8 +9,18 @@ published file, parses it — JSON or CSV, in either of CMS's tall/wide CSV shap
 against a checklist of what the file is actually required to contain, item by item, so you can see
 exactly which rules pass, which fail, and which specific rows are the problem.
 
-See `ARCHITECTURE.md` for how the system is put together, `AUTH.md` for how sign-in works, and
-`DEPLOY.md` for shipping it to AWS.
+### Documentation map
+
+| Document | What it covers |
+|---|---|
+| [`SRS.md`](SRS.md) | What the system is required to do — numbered functional and non-functional requirements, user stories, and the limitations that are deliberately out of scope. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | How it is put together, and why each "we didn't use X" decision was made. |
+| [`UI-DESIGN.md`](UI-DESIGN.md) | The interface: design tokens, components, user flows, and measured accessibility contrast. |
+| [`AUTH.md`](AUTH.md) | How sign-in works, and why it is magic-links-only. |
+| [`DEPLOY.md`](DEPLOY.md) | Shipping it to AWS ECS Fargate, plus the one-time infrastructure setup. |
+
+Every Go declaration in this repository also carries a doc comment explaining what it does and how
+it relates to the rest of the codebase — `go doc ./internal/...` is a usable tour of the code.
 
 ## Verification status — read this before trusting anything below
 
@@ -29,16 +39,29 @@ assuming "sandboxed" means "unverified" across the board.
 | `internal/store`, `internal/auth`, `internal/validation`, `internal/web` | **No automated tests — verified by real end-to-end execution instead** | These packages have no `_test.go` files yet — a real gap, called out explicitly in `ARCHITECTURE.md`'s "What's intentionally not here yet." What they do have: this project was actually run — the compiled binary, a real local PostgreSQL 16 instance, and a hand-rolled SMTP catcher script — through the full user journey via `curl`: request a magic link, receive it (from the fake SMTP catcher), consume it, get a session cookie, create a hospital, trigger a validation run against a test MRF fixture, and read back the rendered compliance report. That run surfaced and led to fixing two real bugs (below) that `go build`/`go vet` could never have caught. Most recently re-verified: a fresh build against this exact on-disk code started cleanly against the same Postgres instance, applied its (already-applied) migrations idempotently with no error, and answered `/healthz` and `/` correctly. |
 | Two real bugs found this way | **Found and fixed** | (1) `pq.Array(nil)` for a rule with zero sample failures serialized to SQL `NULL`, violating a `NOT NULL` column constraint — only appeared when a real save happened against a real schema. Fixed in `internal/store/runs.go`. (2) `html/template`'s `{{if}}` on a `*bool` only checks non-nil, never dereferences — the dashboard showed "Compliant" for runs that had actually failed. Fixed via a `derefBool` template function (`internal/web/templates.go`). Both fixes were re-verified by re-running the same end-to-end flow and confirming correct output. See `ARCHITECTURE.md` for the second one's mechanism in detail — it's a general Go gotcha worth understanding, not just a one-off fix. |
 | `docker-compose.yml` | **Syntax-validated only** | `docker compose config` parses it cleanly. The Docker CLI is present in this sandbox but **no Docker daemon is running**, so `docker compose up --build` has never actually executed here — the app itself was run as a plain local binary against a real (non-containerized) Postgres instead. |
-| `Dockerfile` / `docker build` | **Not run** | Same reason — no daemon available. The multi-stage build (`golang:1.24-alpine` → `alpine:3.24`) follows standard, well-established patterns and both base image tags were checked against Docker Hub's actual current listings, but "the pattern is standard" isn't the same as "this exact Dockerfile has built successfully." Treat your first `docker build` as the real first test. |
+| `Dockerfile` / `docker build` | **Verified 2026-09-20** | `docker build -t mrfsentinel:ci .` completed successfully against a real Docker daemon (Docker Desktop 29.3.1, Windows). Both stages resolve and build: `golang:1.24-alpine` compiles the static binary, `alpine:3.24` receives it. This was the first time this Dockerfile had ever actually been built — the note it replaces correctly warned that "the pattern is standard" was not the same as "it builds." It does. |
 | `run.sh` | **Actually executed, partially** | The build step (`go build`), the health-check polling loop, and the graceful-shutdown trap all ran for real in this sandbox and worked as written. The Docker Compose step it calls first (to start Postgres + Mailhog) could not be exercised here for the same no-daemon reason above — on a machine with Docker actually running, that step is untested beyond its `docker compose config` syntax check. |
-| `run.cmd` | **Not run** | Windows-only; this sandbox is Linux. Its `for`/`goto`/`errorlevel` health-check loop follows the same well-established batch patterns as DeleteBoard's `run.cmd`, but has never executed anywhere. |
-| GitHub Actions CI (`.github/workflows/ci.yml`) | **Not run** | GitHub's runners aren't subject to this sandbox's restrictions, so it should succeed at everything this table already verified locally (build, vet, test, and — unlike this sandbox — an actual `docker build`, since GitHub's runners do have a working daemon). That's a reasoned expectation, not a result — treat the first real CI run as the first time `docker build` for this project has ever actually happened. |
-| GitHub Actions CD (`.github/workflows/cd.yml`) | **Not run** | Requires AWS infrastructure this sandbox has no access to provision. See `DEPLOY.md`. |
+| `run.cmd` | **Executed 2026-09-20; one real bug found and fixed** | Run for the first time, on Windows 11. It surfaced a genuine defect that had nothing to do with its logic: the file was committed with **LF-only line endings**, which cmd.exe mis-parses — `REM` lines were truncated mid-token and the script emitted `'M' is not recognized as an internal or external command` before doing anything. Fixed by converting the file to CRLF and adding a [`.gitattributes`](.gitattributes) that pins `*.cmd`/`*.bat` to CRLF and `*.sh`/`Dockerfile`/YAML to LF, so Git cannot undo it on a future checkout. After the fix the script parses cleanly and its new preflight check runs correctly. The Docker/build/health-poll path beyond the preflight is still unexercised here, because this machine has no Go toolchain installed. |
+| GitHub Actions CI (`.github/workflows/ci.yml`) | **Ran, failed, diagnosed, fixed** | The first push failed at *Verify go.mod/go.sum are tidy*: `lib/pq` was marked `// indirect` in `go.mod` although `internal/store/db.go` imports it directly (a blank `_` import still counts as direct), so `go mod tidy` rewrote the line and `git diff --exit-code` tripped. `go.mod` has been tidied, and the step now prints an explanation rather than a bare diff. Every other step in the workflow was then run locally to completion — `go mod download`, the tidy check, `gofmt -l`, `go vet`, `go build`, `go test`, and `docker build` — all passing. The workflow also now cancels superseded runs and requests read-only permissions. |
+| GitHub Actions CD (`.github/workflows/cd.yml`) | **Ran, failed by design; now skips instead** | It failed at *Configure AWS credentials* with `Input required and not supplied: aws-region`, because the AWS infrastructure in `DEPLOY.md` has never been provisioned. That was documented behavior, but it meant every push to `main` showed a red X. The deploy job is now guarded by `if: vars.AWS_REGION != '' && vars.ECS_CLUSTER != ''`, so it skips cleanly until those repository variables are set. The deploy path itself remains genuinely unrun — see `DEPLOY.md`. |
+| Doc comments (`go doc`) | **Verified 2026-09-20, mechanically** | Every top-level `func`, `type`, `const`, and `var` in the repository carries a doc comment — **166 of 166**, exported and unexported, test helpers included — checked by script rather than by eye, and re-checked after `gofmt` confirmed the files were still clean. See `CLAUDE.md` for the audit command and the gofmt alignment trap that adding these comments can spring. |
+| Documentation set | **Complete as of 2026-09-20** | `README.md`, `SRS.md`, `ARCHITECTURE.md`, `UI-DESIGN.md`, `AUTH.md`, `DEPLOY.md`, all cross-linked from the map at the top of this file. The contrast ratios quoted in `UI-DESIGN.md` were computed from the actual CSS tokens, not estimated — one of them fails WCAG AA and is documented as failing, with the one-line fix noted but deliberately not applied. |
 
 **If you want to re-verify any of this yourself, the fastest path is:** `go build ./... && go vet
 ./... && go test ./...`, then `docker compose up --build` (or `./run.sh` if you don't want the
-Docker path) — in that order, since the Go-level checks are fast and the Docker path is the one
-piece of this stack that has never run end-to-end in this sandbox.
+Docker path) — in that order, since the Go-level checks are fast and the container path exercises
+the most moving parts at once.
+
+**No Go toolchain on your machine?** You can still run every Go-level check, using the same image
+CI does — nothing to install beyond Docker:
+
+```bash
+docker run --rm -v "$PWD:/src" -v mrfsentinel-gomod:/go/pkg/mod -w /src golang:1.24-alpine \
+  sh -c 'gofmt -l . && go vet ./... && go build ./... && go test ./...'
+```
+
+(`gofmt -l .` printing any filename is a failure — CI treats it as one.) That is exactly how the
+2026-09-20 rows in the table above were verified, on a Windows machine with Docker but no local Go.
 
 ## Tech stack, and why
 
@@ -126,7 +149,8 @@ mrfsentinel/
 ├── internal/             all application code — see ARCHITECTURE.md for the package breakdown
 ├── docker-compose.yml    Local dev stack: postgres + mailhog + app
 ├── run.sh / run.cmd      One-command local run (Option B above)
-└── .github/workflows/    CI (build/vet/test/docker build) and CD (AWS ECS deploy) on push/PR
+├── .github/workflows/    CI (build/vet/test/docker build) and CD (AWS ECS deploy) on push/PR
+└── *.md                  Documentation — see the map at the top of this file
 ```
 
 ## Deploying
