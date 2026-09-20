@@ -1,0 +1,83 @@
+# Continuous deployment: on every push to main, builds the one container image (see Dockerfile —
+# the whole app, frontend included via go:embed, is a single static binary in a single image),
+# pushes it to ECR, and rolls the one ECS Fargate service forward. See DEPLOY.md for the one-time
+# AWS setup this depends on (an OIDC-trusted IAM role, the ECR repo, the ECS cluster/service) —
+# none of that exists until you provision it, so this workflow will fail at "configure AWS
+# credentials" on a fresh clone. That's expected, not a bug in the workflow.
+#
+# Compare to DeleteBoard's cd.yml, which builds and deploys two images (backend + frontend) to two
+# ECS services behind one ALB. This project only needs one of each, because there's no separate
+# frontend build — internal/web's templates and static assets are already inside the one binary.
+#
+# Gated behind nothing else running first — GitHub's branch protection is what should require
+# ci.yml to pass before a push reaches main in the first place, rather than this workflow
+# re-running the same checks. If you don't have branch protection configured yet, consider adding
+# `workflow_run` gating on ci.yml, or requiring CI as a required status check on main.
+name: CD
+
+on:
+  push:
+    branches: [main]
+  # Lets you re-run a deploy manually (e.g. to re-trigger after fixing an infra issue) without
+  # needing an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false # never cancel a deploy that's already rolling out
+
+permissions:
+  id-token: write # required for OIDC — see DEPLOY.md "CI/CD"
+  contents: read
+
+env:
+  ECR_REPO: mrfsentinel
+  ECS_SERVICE: mrfsentinel
+
+jobs:
+  deploy:
+    name: Build, push, and deploy
+    runs-on: ubuntu-latest
+    environment: production # optional manual-approval gate — configure under repo Settings → Environments
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6.2.4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$ECR_REPO:$IMAGE_TAG" \
+                        -t "$REGISTRY/$ECR_REPO:latest" \
+                        .
+          docker push "$REGISTRY/$ECR_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPO:latest"
+
+      # This assumes the ECS task definition's container image is set to the repo's `:latest` tag
+      # and the service is configured to pick up a new image digest on redeploy. If instead each
+      # deploy should pin an explicit immutable tag in a new task definition revision (arguably
+      # safer — makes "what's actually running" an explicit, auditable value rather than a moving
+      # tag), swap this for `aws ecs register-task-definition` with the new image URI, then
+      # `update-service --task-definition <new-revision>`.
+      - name: Force new ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster "${{ vars.ECS_CLUSTER }}" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment
+
+      - name: Wait for service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ vars.ECS_CLUSTER }}" \
+            --services "$ECS_SERVICE"

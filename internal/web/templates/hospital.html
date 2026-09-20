@@ -1,0 +1,42 @@
+{{define "title"}}{{.Hospital.Name}} · MRF Sentinel{{end}}
+{{define "content"}}
+<p><a href="/dashboard">&larr; All hospitals</a></p>
+<h1>{{.Hospital.Name}}</h1>
+<p class="mono muted"><a href="{{.Hospital.MRFURL}}" target="_blank" rel="noopener">{{.Hospital.MRFURL}}</a></p>
+
+<form method="post" action="/hospitals/{{.Hospital.ID}}/runs">
+  <button type="submit">Run a new check</button>
+</form>
+
+<h2>Check history</h2>
+{{if not .Runs}}
+  <p class="muted">No checks yet.</p>
+{{else}}
+  <table class="report-table">
+    <thead>
+      <tr><th>Started</th><th>Status</th><th>Format</th><th>Rows checked</th><th></th></tr>
+    </thead>
+    <tbody>
+      {{range .Runs}}
+      <tr>
+        <td>{{.StartedAt.Format "2006-01-02 15:04 MST"}}</td>
+        <td>
+          {{if or (eq .Status "pending") (eq .Status "running")}}
+            <span class="badge badge-pending">Checking…</span>
+          {{else if eq .Status "failed"}}
+            <span class="badge badge-error">Error</span>
+          {{else if derefBool .OverallPassed}}
+            <span class="badge badge-pass">Compliant</span>
+          {{else}}
+            <span class="badge badge-fail">Issues found</span>
+          {{end}}
+        </td>
+        <td class="mono">{{.Format}}</td>
+        <td>{{.RowsProcessed}}</td>
+        <td><a href="/runs/{{.ID}}">View report</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+{{end}}
+{{end}}

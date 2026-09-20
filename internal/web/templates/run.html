@@ -1,0 +1,71 @@
+{{define "title"}}Report · MRF Sentinel{{end}}
+{{define "content"}}
+<p><a href="/hospitals/{{.Report.Run.HospitalID}}">&larr; Back to this hospital</a></p>
+<h1>Compliance report</h1>
+<p class="muted">Started {{.Report.Run.StartedAt.Format "2006-01-02 15:04 MST"}}{{if .Report.Run.FinishedAt}} · finished {{.Report.Run.FinishedAt.Format "15:04 MST"}}{{end}}</p>
+
+{{if .InFlight}}
+  <div class="card banner banner-pending" id="in-flight-banner">
+    <strong>Checking this file now…</strong>
+    <p>Large hospital MRFs can take a while to stream and check. This page updates automatically once it's done.</p>
+  </div>
+  <script src="/static/app.js" data-run-status-url="/runs/{{.Report.Run.ID}}/status"></script>
+{{else if eq .Report.Run.Status "failed"}}
+  <div class="card banner banner-error">
+    <strong>This check couldn't complete.</strong>
+    <p>{{.Report.Run.ErrorMessage}}</p>
+  </div>
+{{else}}
+  {{if derefBool .Report.Run.OverallPassed}}
+    <div class="card banner banner-pass"><strong>Every checklist rule passed.</strong></div>
+  {{else}}
+    <div class="card banner banner-fail"><strong>This file has one or more compliance issues — see below.</strong></div>
+  {{end}}
+
+  {{if .Report.Run.ParseErr}}
+    <div class="card banner banner-error">
+      <strong>The file stopped parsing partway through.</strong>
+      <p>{{.Report.Run.ParseErr}}</p>
+      <p class="muted">Results below reflect the {{.Report.Run.RowsProcessed}} rows read before that happened — a partial report, not a failed one.</p>
+    </div>
+  {{end}}
+
+  <p class="muted">Format detected: <span class="mono">{{.Report.Run.Format}}</span> · {{.Report.Run.RowsProcessed}} rows checked</p>
+
+  <h2>Hospital-level checks</h2>
+  <table class="report-table">
+    <thead><tr><th>Rule</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+      {{range .Report.HospitalChecks}}
+      <tr>
+        <td>{{.Description}}</td>
+        <td>{{if .Passed}}<span class="badge badge-pass">Pass</span>{{else}}<span class="badge badge-fail">Fail</span>{{end}}</td>
+        <td class="muted">{{.Detail}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  <h2>Item-level checks</h2>
+  <table class="report-table">
+    <thead><tr><th>Rule</th><th>Compliance</th><th>Rows checked</th><th>Rows failed</th><th>Examples</th></tr></thead>
+    <tbody>
+      {{range .Items}}
+      <tr>
+        <td>{{.Description}}</td>
+        <td>{{if .Passed}}<span class="badge badge-pass">{{percent .ComplianceRate}}</span>{{else}}<span class="badge badge-fail">{{percent .ComplianceRate}}</span>{{end}}</td>
+        <td>{{.RowsChecked}}</td>
+        <td>{{.RowsFailed}}</td>
+        <td class="muted">
+          {{if .SampleFailures}}
+            <ul class="sample-list">{{range .SampleFailures}}<li>{{.}}</li>{{end}}</ul>
+          {{else}}
+            —
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+{{end}}
+{{end}}

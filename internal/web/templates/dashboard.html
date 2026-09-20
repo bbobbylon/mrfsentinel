@@ -1,0 +1,50 @@
+{{define "title"}}Dashboard · MRF Sentinel{{end}}
+{{define "content"}}
+<h1>Hospitals you're tracking</h1>
+
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+{{if not .Hospitals}}
+  <p class="muted">You're not tracking any hospitals yet — add one below.</p>
+{{else}}
+  <table class="report-table">
+    <thead>
+      <tr><th>Hospital</th><th>MRF URL</th><th>Latest check</th></tr>
+    </thead>
+    <tbody>
+      {{range .Hospitals}}
+      <tr>
+        <td><a href="/hospitals/{{.ID}}">{{.Name}}</a></td>
+        <td class="mono truncate"><a href="{{.MRFURL}}" target="_blank" rel="noopener">{{.MRFURL}}</a></td>
+        <td>
+          {{if not .LatestRun}}
+            <span class="badge badge-muted">Never checked</span>
+          {{else if or (eq .LatestRun.Status "pending") (eq .LatestRun.Status "running")}}
+            <a href="/runs/{{.LatestRun.ID}}" class="badge badge-pending">Checking…</a>
+          {{else if eq .LatestRun.Status "failed"}}
+            <a href="/runs/{{.LatestRun.ID}}" class="badge badge-error">Error</a>
+          {{else if derefBool .LatestRun.OverallPassed}}
+            <a href="/runs/{{.LatestRun.ID}}" class="badge badge-pass">Compliant</a>
+          {{else}}
+            <a href="/runs/{{.LatestRun.ID}}" class="badge badge-fail">Issues found</a>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+{{end}}
+
+<div class="card narrow">
+  <h2>Add a hospital</h2>
+  <form method="post" action="/hospitals">
+    <label for="name">Hospital name</label>
+    <input type="text" id="name" name="name" placeholder="Example Regional Medical Center" required>
+
+    <label for="mrf_url">Published MRF URL</label>
+    <input type="url" id="mrf_url" name="mrf_url" placeholder="https://example-hospital.org/standardcharges.json" required>
+
+    <button type="submit">Add and check now</button>
+  </form>
+</div>
+{{end}}

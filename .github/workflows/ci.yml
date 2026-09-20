@@ -1,0 +1,69 @@
+name: CI
+
+# Runs on every push and PR — build, vet, and test the Go module, plus a
+# real Postgres service container so internal/store's migrations can be
+# applied for real, the same way they were verified locally during
+# development (see README.md's verification table). Compare to
+# DeleteBoard's ci.yml, which needs two separate jobs (backend + frontend)
+# — this project only has one, because there's no separate frontend build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mrfsentinel
+          POSTGRES_USER: mrfsentinel
+          POSTGRES_PASSWORD: mrfsentinel_local_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mrfsentinel -d mrfsentinel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.24"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: gofmt check
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./... -v
+        env:
+          DATABASE_URL: postgres://mrfsentinel:mrfsentinel_local_dev@localhost:5432/mrfsentinel?sslmode=disable
+
+      - name: Docker build
+        run: docker build -t mrfsentinel:ci .

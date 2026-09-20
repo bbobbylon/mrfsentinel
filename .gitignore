@@ -1,0 +1,16 @@
+# Build output
+/bin/
+/mrfsentinel
+
+# Go
+*.test
+*.out
+
+# Environment / secrets
+.env
+.env.local
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store

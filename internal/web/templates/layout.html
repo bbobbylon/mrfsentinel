@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{block "title" .}}MRF Sentinel{{end}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/dashboard" class="brand">MRF Sentinel</a>
+    <span class="tagline">CY2026 hospital price transparency checklist</span>
+    {{with .User}}
+      <form class="signout" method="post" action="/logout">
+        <span class="user-email">{{.Email}}</span>
+        <button type="submit" class="link-button">Sign out</button>
+      </form>
+    {{end}}
+  </header>
+  <main class="container">
+    {{block "content" .}}{{end}}
+  </main>
+</body>
+</html>
