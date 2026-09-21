@@ -209,7 +209,7 @@ Requirement IDs are stable and referenced elsewhere in this document.
 
 | ID | Requirement | Status |
 |---|---|---|
-| NFR-5.1 | Every exported and unexported declaration carries a doc comment explaining what it does and how it relates to the rest of the codebase. | Met — 166/166 declarations as of this date. |
+| NFR-5.1 | Every exported and unexported declaration carries a doc comment explaining what it does and how it relates to the rest of the codebase. | Met — 164/164 declarations as of this date. |
 | NFR-5.2 | CI must enforce `gofmt`, `go vet`, `go build`, and `go test` on every push and pull request. | Met — `.github/workflows/ci.yml`. |
 | NFR-5.3 | The deployable artifact is a single binary with the frontend compiled in; no separate asset build or deploy step exists. | Met — `go:embed`. |
 | NFR-5.4 | The app runs on Linux, macOS, and Windows, with one-command local startup on each. | Met — `run.sh` and `run.cmd`. |

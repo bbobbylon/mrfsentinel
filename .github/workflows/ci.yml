@@ -26,7 +26,12 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`: GitHub begins migrating that label to
+    # Ubuntu 26 on 2026-10-19, and a major image change lands as a surprise red
+    # run on whatever gets pushed that day. Bumping this is then a deliberate
+    # one-line commit that can be reverted, instead of an image swap nobody
+    # chose. Revisit once 26.04 has settled.
+    runs-on: ubuntu-24.04
 
     services:
       postgres:

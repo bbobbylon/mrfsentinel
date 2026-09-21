@@ -48,7 +48,7 @@ a color.
 |---|---|---|---|
 | Pass | `--pass` `#1b7a3d` | `--pass-bg` `#e6f5ea` | Rule satisfied; file compliant. |
 | Fail | `--fail` `#b3261e` | `--fail-bg` `#fbe9e8` | Rule violated; also reused for hard errors. |
-| Pending | `--pending` `#9a6b00` | `--pending-bg` `#fdf1d6` | Check queued or running. |
+| Pending | `--pending` `#855c00` | `--pending-bg` `#fdf1d6` | Check queued or running. |
 | Neutral | `--muted` `#5b6472` | `--muted-badge-bg` `#eceff2` | Never checked — absence of a verdict, not a bad one. |
 
 The palette is deliberately three-signal (green / red / amber) plus one neutral. A compliance report
@@ -288,17 +288,20 @@ badges**.
 | `--fail` `#b3261e` | `--fail-bg` `#fbe9e8` | 5.58:1 | ✅ AA |
 | `--muted` `#5b6472` | `--muted-badge-bg` `#eceff2` | 5.18:1 | ✅ AA |
 | `--pass` `#1b7a3d` | `--pass-bg` `#e6f5ea` | 4.78:1 | ✅ AA |
-| `--pending` `#9a6b00` | `--pending-bg` `#fdf1d6` | **4.18:1** | ❌ **fails AA** |
+| `--pending` `#855c00` | `--pending-bg` `#fdf1d6` | 5.31:1 | ✅ AA |
 
-**The one failure.** The pending badge ("Checking…") is 4.18:1 against its own background, short of
-the 4.5:1 needed at 12.8px. The fix is a one-line token change in `style.css`:
+Every pair clears AA. That was not true when this document was first written: `--pending` was
+`#9a6b00`, which is **4.18:1** on `--pending-bg` — short of the 4.5:1 that the pending badge
+("Checking…") needs at 12.8px, and the only failure in the table. It was darkened to `#855c00`,
+which is the value shipping now.
 
-```css
---pending: #855c00;  /* was #9a6b00 — 5.31:1 on --pending-bg, passes AA */
-```
+If a lighter amber is ever wanted, `#8a5f00` (5.04:1) is the lightest that still clears the bar;
+anything above it fails again. The badge text is small, so the 3:1 large-text allowance does not
+apply here.
 
-`#8a5f00` (5.04:1) is the minimum that clears the bar if a lighter amber is preferred. This has not
-been applied, so the table above stays honest about the current code.
+Ratios were computed from the WCAG 2.1 relative-luminance formula against the tokens as they appear
+in `style.css`, not sampled from a rendered page — so they hold as long as badges keep using their
+paired background and nothing introduces opacity.
 
 ### 5.4 Known gaps
 
