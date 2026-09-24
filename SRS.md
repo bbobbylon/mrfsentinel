@@ -209,11 +209,11 @@ Requirement IDs are stable and referenced elsewhere in this document.
 
 | ID | Requirement | Status |
 |---|---|---|
-| NFR-5.1 | Every exported and unexported declaration carries a doc comment explaining what it does and how it relates to the rest of the codebase. | Met — 226/226 declarations as of this date. |
+| NFR-5.1 | Every exported and unexported declaration carries a doc comment explaining what it does and how it relates to the rest of the codebase. | Met — 229/229 declarations as of this date. |
 | NFR-5.2 | CI must enforce `gofmt`, `go vet`, `go build`, and `go test` on every push and pull request. | Met — `.github/workflows/ci.yml`. |
 | NFR-5.3 | The deployable artifact is a single binary with the frontend compiled in; no separate asset build or deploy step exists. | Met — `go:embed`. |
 | NFR-5.4 | The app runs on Linux, macOS, and Windows, with one-command local startup on each. | Met — `run.sh` and `run.cmd`. |
-| NFR-5.5 | Test coverage of `internal/store`, `internal/auth`, `internal/validation`, `internal/web`. | Met — all four now have `_test.go` files (41 of the suite's 53 tests). `internal/store` and `internal/validation` run against a real Postgres and skip when `DATABASE_URL` is unset; `internal/auth`, `internal/config`, and `internal/web` need no database. `cmd/server` remains untested, being wiring only. |
+| NFR-5.5 | Test coverage of `internal/store`, `internal/auth`, `internal/validation`, `internal/web`. | Met — all four now have `_test.go` files (42 of the suite's 54 tests). `internal/store` and `internal/validation` run against a real Postgres and skip when `DATABASE_URL` is unset; `internal/auth`, `internal/config`, and `internal/web` need no database. `cmd/server` remains untested, being wiring only. |
 
 ---
 
@@ -243,7 +243,7 @@ Requirement IDs are stable and referenced elsewhere in this document.
 **Quality** — all of these are enforced in CI and currently pass:
 
 - `gofmt -l .` reports nothing; `go vet ./...` reports nothing; `go build ./...` succeeds.
-- `go test ./...` passes (53 tests across all seven `internal/` packages; the `internal/store` and
+- `go test ./...` passes (54 tests across all seven `internal/` packages; the `internal/store` and
   `internal/validation` suites need `DATABASE_URL` and skip without it).
 - Every declaration carries a doc comment.
 

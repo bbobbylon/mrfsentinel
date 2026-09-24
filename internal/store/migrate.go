@@ -41,6 +41,12 @@ var migrationFS embed.FS
 // worth under 60 lines of stdlib code here rather than a dependency this
 // project couldn't even verify would build.
 func Migrate(ctx context.Context, db *sql.DB) error {
+	unlock, err := lockForMigration(ctx, db)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			filename   TEXT PRIMARY KEY,
@@ -75,6 +81,53 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// migrationLockID identifies this app's migration lock. The value is
+// arbitrary — advisory locks are just integers Postgres tracks on your
+// behalf, with no meaning of their own — but it has to stay stable, since
+// two processes only exclude each other by agreeing on the same number.
+const migrationLockID int64 = 4051801
+
+// lockForMigration takes a Postgres advisory lock and returns the function
+// that releases it.
+//
+// Without this, two processes migrating the same fresh database at the same
+// time collide: CREATE TABLE IF NOT EXISTS is not atomic against a
+// concurrent creator, so both see the table missing, both try to create it,
+// and the loser gets "duplicate key value violates unique constraint
+// pg_type_typname_nsp_index" rather than the silent no-op the IF NOT EXISTS
+// suggests. The same applies to the enum type in 0001_init.sql.
+//
+// That is not a hypothetical. cmd/server migrates on every startup, so any
+// deployment that starts two tasks together races here — and the test suite
+// hit it first, because `go test ./...` runs each package's binary
+// concurrently and both internal/store and internal/validation migrate on
+// the way in.
+//
+// The lock is taken on a dedicated *sql.Conn rather than through the pool.
+// Advisory locks taken with pg_advisory_lock are session-scoped, and a
+// pooled *sql.DB gives no guarantee that the unlock lands on the same
+// connection as the lock. The returned function unlocks before handing the
+// connection back, since database/sql does not reset session state when a
+// connection returns to the pool — a lock left behind would strand it.
+func lockForMigration(ctx context.Context, db *sql.DB) (func(), error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: acquiring connection for migration lock: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("store: acquiring migration lock: %w", err)
+	}
+
+	return func() {
+		// context.Background rather than ctx: the unlock has to run even
+		// when the caller's context is already cancelled, or the lock
+		// outlives the process that took it.
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockID)
+		_ = conn.Close()
+	}, nil
 }
 
 // migrationAlreadyApplied reports whether a migration file has been

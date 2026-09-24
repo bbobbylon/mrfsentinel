@@ -63,7 +63,7 @@ command.
 ### 1. Every declaration carries a doc comment
 
 Every top-level `func`, `type`, `const`, and `var` — exported *and* unexported, including test
-helpers — has a doc comment. Coverage is currently **226/226**. Keep it there when adding code.
+helpers — has a doc comment. Coverage is currently **229/229**. Keep it there when adding code.
 
 Comments in this codebase explain **how a thing relates to the rest of the system**, not what the
 next line does. They routinely: name the caller, point at the file that holds the other half of a

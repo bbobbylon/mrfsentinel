@@ -159,6 +159,37 @@ follows the pointer to check the boolean *underneath* it. A non-nil pointer to `
 comment for the underlying mechanism. Every template that renders a pass/fail badge from a `*bool`
 now calls `derefBool` explicitly rather than relying on bare `{{if}}`.
 
+## Migrations run under an advisory lock
+
+`Migrate` is called by `cmd/server` on every startup, and it is idempotent — it records each applied
+file in `schema_migrations` and skips what is already there. What it was *not*, until 2026-09-23, was
+safe to run from two processes at once against a database that has no schema yet.
+
+The trap is that `CREATE TABLE IF NOT EXISTS` reads as atomic and is not. Two sessions can both
+evaluate the "if not exists" check, both find nothing, and both proceed to create; one wins and the
+other fails with `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`. The
+same applies to the enum type created in `0001_init.sql`. Postgres documents this: the check and the
+creation are not performed as a single atomic step, so `IF NOT EXISTS` protects against a table that
+already existed, not against one being created right now.
+
+This surfaced from the test suite rather than from production, because `go test ./...` runs each
+package's binary concurrently and both `internal/store` and `internal/validation` migrate on the way
+in. It is a production property all the same: two ECS tasks starting together take exactly the same
+path, which matters the moment the service in `DEPLOY.md` scales past one task.
+
+`Migrate` now takes `pg_advisory_lock` before touching anything, including the `schema_migrations`
+table itself, and releases it at the end. Two details matter in that implementation:
+
+- The lock is taken on a **dedicated `*sql.Conn`**, not through the pool. `pg_advisory_lock` is
+  session-scoped, and a pooled `*sql.DB` gives no guarantee that the unlock statement runs on the
+  same connection that took the lock.
+- The unlock runs on `context.Background()`, not the caller's context, and before the connection is
+  returned to the pool. `database/sql` does not reset session state on release, so a lock left
+  behind would strand that pooled connection for the life of the process.
+
+The loser of the race no longer errors — it blocks, then finds the migrations already recorded and
+skips them, which is the behavior the idempotency was supposed to give in the first place.
+
 ## Auth
 
 Magic-link email only — no passkeys. See `AUTH.md` for the full flow and why this project doesn't

@@ -97,6 +97,45 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 	}
 }
 
+// TestMigrate_IsSafeToRunConcurrently is the regression test for a race
+// that reached CI before it was caught locally.
+//
+// `go test ./...` runs each package's test binary concurrently, so
+// internal/store and internal/validation both migrated the same fresh
+// database at the same moment. CREATE TABLE IF NOT EXISTS is not atomic
+// against a concurrent creator in Postgres: both sessions saw the table
+// missing, both tried to create it, and the loser failed with "duplicate
+// key value violates unique constraint pg_type_typname_nsp_index". It only
+// passed on a developer machine because the database there already had the
+// schema from an earlier run, which is exactly the condition that hides it.
+//
+// cmd/server migrates on every startup, so this is a production property
+// too, not merely a test-harness one: any deploy that starts two tasks
+// together takes the same path. Migrate now serialises itself on a Postgres
+// advisory lock, and this asserts that.
+func TestMigrate_IsSafeToRunConcurrently(t *testing.T) {
+	s := newTestStore(t)
+	ctx := testContext(t)
+
+	const concurrency = 4
+	errs := make(chan error, concurrency)
+	start := make(chan struct{})
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			<-start // line them all up so they contend rather than queue
+			errs <- Migrate(ctx, s.db)
+		}()
+	}
+	close(start)
+
+	for i := 0; i < concurrency; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent Migrate %d failed: %v", i, err)
+		}
+	}
+}
+
 // TestGetOrCreateUserByEmail_IsStableForTheSameAddress covers the sign-in
 // path's central assumption: requesting a second magic link must land on the
 // existing account, not mint a duplicate one that would orphan the first
