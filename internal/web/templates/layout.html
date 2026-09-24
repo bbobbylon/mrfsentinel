@@ -7,6 +7,11 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- First focusable element on every page: visually hidden until focused,
+       so keyboard and screen-reader users can jump past the header instead
+       of tabbing through the brand link and sign-out form on each
+       navigation. See .skip-link in style.css. -->
+  <a href="#main-content" class="skip-link">Skip to content</a>
   <header class="topbar">
     <a href="/dashboard" class="brand">MRF Sentinel</a>
     <span class="tagline">CY2026 hospital price transparency checklist</span>
@@ -17,7 +22,10 @@
       </form>
     {{end}}
   </header>
-  <main class="container">
+  <!-- tabindex="-1" makes this a valid target for the skip link: without it
+       the browser moves the scroll position but leaves focus behind in the
+       header, so the next Tab lands back where the user just skipped from. -->
+  <main class="container" id="main-content" tabindex="-1">
     {{block "content" .}}{{end}}
   </main>
 </body>

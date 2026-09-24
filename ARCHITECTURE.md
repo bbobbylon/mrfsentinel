@@ -166,15 +166,20 @@ need the second auth method DeleteBoard has.
 
 ## What's intentionally *not* here yet
 
-- **No automated tests for `internal/store`, `internal/auth`, `internal/validation`, or
-  `internal/web`.** `internal/mrf` and `internal/rules` have real unit tests (pure logic, no
-  external dependencies). The other four packages talk to Postgres, SMTP, cookies, and HTTP — they
-  were verified by actually running the compiled binary end-to-end against a real local Postgres
-  instance instead (see `README.md`'s verification table), which is how two genuine bugs got
-  caught, but that's a one-time manual pass, not a regression-proof test suite. The natural next
-  step is integration tests that spin up a disposable Postgres per run — CI already does this for
-  `go test` via a `services:` container (`.github/workflows/ci.yml`); the missing piece is writing
-  the tests themselves, not the infrastructure to run them.
+- **No tests for `cmd/server`.** Every `internal/` package now has a test file; `cmd/server` does
+  not. It is wiring — read config, open the database, migrate, construct the handlers, listen — and
+  testing it would mostly assert that the constructor calls happen in the order they are written
+  on the screen above. The behavior that matters is covered a layer down. What this does leave
+  unguarded is startup *ordering* (Open, then Migrate, then NewStore) and the shutdown path.
+
+  The other packages got their tests on 2026-09-23. Of note in how they are built: `internal/store`
+  and `internal/validation` talk to a real Postgres rather than a mock, because what is worth
+  testing about them *is* the SQL — an ownership filter that lives inside a `WHERE` clause cannot
+  be verified against a fake. CI already provides that database through a `services:` container.
+  Those suites skip when `DATABASE_URL` is unset, so a developer without a database still gets a
+  green `go test ./...`, but they **fail** rather than skip when `DATABASE_URL` is set and
+  unreachable — otherwise a broken CI database would quietly retire them and leave a green tick
+  meaning nothing.
 - **No distributed run queue.** `RunAsync` is a bare goroutine on whichever process instance
   received the request. Fine for a single running instance; would need a real queue (or at least a
   `SELECT ... FOR UPDATE SKIP LOCKED` claim pattern against `validation_runs`) before running

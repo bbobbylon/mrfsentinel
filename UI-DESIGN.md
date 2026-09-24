@@ -305,21 +305,34 @@ paired background and nothing introduces opacity.
 
 ### 5.4 Known gaps
 
-Stated rather than glossed:
+Five of the six gaps recorded here have since been closed. What was fixed, and how:
 
-1. **No skip-to-content link.** The top bar is short, so the cost is low, but it is missing.
-2. **No `aria-live` on the in-flight banner.** When a run finishes, `app.js` calls
-   `window.location.reload()`; a screen-reader user gets a full page load with no announcement that
-   something changed. An `aria-live="polite"` region, or announcing before reloading, would fix it.
-3. **`<th>` elements have no `scope` attribute.** The tables are simple enough that most screen
-   readers infer correctly, but `scope="col"` should be explicit.
-4. **`.truncate` hides content with no recovery.** Long MRF URLs are ellipsized at 320px with no
-   `title` attribute and no expand affordance. The link still resolves, but the text is unreadable.
-5. **No visible focus styling beyond the browser default.** Defaults are adequate on current
-   browsers, but a deliberate `:focus-visible` treatment would be better on the brand-colored button.
-6. **Never tested with an actual screen reader.** The claims above are derived from the markup and
-   from computed ratios, not from a NVDA/JAWS/VoiceOver session. Treat §5.1 as "structurally sound,"
-   not "verified assistive-technology support."
+1. **Skip-to-content link** — added. `layout.html` opens with a `.skip-link` anchor that is
+   positioned off-screen until focused, targeting `<main id="main-content" tabindex="-1">`. The
+   `tabindex` matters: without it the browser scrolls but leaves focus in the header, so the next
+   Tab returns to what the user just skipped.
+2. **`aria-live` on the in-flight banner** — added. The banner carries `role="status"`, and
+   `app.js` now writes "Check complete. Loading the results…" into it and waits one second before
+   reloading. The delay is the point: a reload in the same tick destroys the announcement before a
+   screen reader can queue it.
+3. **`scope` on `<th>`** — added. All 16 header cells across the three table templates now carry
+   `scope="col"`.
+4. **`.truncate` recovery** — added. The dashboard's MRF URL link carries a `title` attribute with
+   the full URL, so the value ellipsized at 320px is recoverable on hover and exposed to assistive
+   technology.
+5. **Focus styling** — added. A single `:focus-visible` rule draws a 3px brand-colored outline with
+   a 2px offset, replacing the browser default. `:focus-visible` rather than `:focus` so it appears
+   for keyboard navigation but not on mouse clicks; the offset keeps it legible against the
+   brand-colored button, where a ring drawn on the fill would disappear into it. `#main-content`
+   opts out, since a ring around the whole main region reads as a glitch rather than as feedback.
+
+One gap remains open, and it is the one that would validate the other five:
+
+6. **Never tested with an actual screen reader.** Everything above is derived from the markup and
+   from computed contrast ratios, not from an NVDA, JAWS, or VoiceOver session. The fixes follow
+   standard practice and should behave, but "should behave" is not "verified." Treat §5.1 and the
+   five items above as *structurally* sound, not as confirmed assistive-technology support. Nothing
+   short of an actual screen-reader pass changes that, so it stays listed here.
 
 ---
 

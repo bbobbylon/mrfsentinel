@@ -36,6 +36,26 @@ modules between runs.
 
 Do not claim a change builds, vets, formats, or passes tests without having actually run this.
 
+That command runs the database-free tests only. `internal/store` and `internal/validation` need a
+real Postgres and **skip** without one, so a green run of the above does not mean they passed. To
+run everything, start a Postgres and pass `DATABASE_URL` in:
+
+```bash
+docker run -d --name mrfsentinel-testpg \
+  -e POSTGRES_DB=mrfsentinel -e POSTGRES_USER=mrfsentinel \
+  -e POSTGRES_PASSWORD=mrfsentinel_local_dev -p 55432:5432 postgres:16-alpine
+
+docker run --rm --link mrfsentinel-testpg:pg \
+  -e DATABASE_URL='postgres://mrfsentinel:mrfsentinel_local_dev@pg:5432/mrfsentinel?sslmode=disable' \
+  -v "B:\Documents\Coding\GithubRepository\MRFSentinel:/src" \
+  -v mrfsentinel-gomod:/go/pkg/mod \
+  -w /src golang:1.24-alpine \
+  sh -c 'go test ./... -count=1'
+```
+
+Docker Desktop may not be running — start it and wait for `docker info` to succeed before either
+command.
+
 ---
 
 ## Conventions that are enforced
@@ -43,7 +63,7 @@ Do not claim a change builds, vets, formats, or passes tests without having actu
 ### 1. Every declaration carries a doc comment
 
 Every top-level `func`, `type`, `const`, and `var` — exported *and* unexported, including test
-helpers — has a doc comment. Coverage is currently **164/164**. Keep it there when adding code.
+helpers — has a doc comment. Coverage is currently **226/226**. Keep it there when adding code.
 
 Comments in this codebase explain **how a thing relates to the rest of the system**, not what the
 next line does. They routinely: name the caller, point at the file that holds the other half of a
@@ -69,18 +89,31 @@ gofmt's tabwriter was aligning, so the surviving padding before `{` becomes wron
 flags the file. When documenting one of a pair like `Format()` / `Metadata()`, collapse the padding
 to a single space and separate the declarations with a blank line.
 
-### 2. Use em dashes, not `--`
+### 2. Tests that need a database skip, but never when one is configured
+
+`internal/store` and `internal/validation` call `t.Skip` when `DATABASE_URL` is unset, so
+`go test ./...` stays green for someone without Postgres. When `DATABASE_URL` *is* set but the
+database cannot be reached, they call `t.Fatal` instead. Keep that asymmetry: a skip in CI — which
+always exports `DATABASE_URL` — would silently retire the entire suite the first time the service
+container broke, and README.md's verification table would go on claiming coverage that no longer
+ran. Copy the `newTestStore` helper's shape when adding another database-backed test file.
+
+Rows are never cleaned up between runs, so anything inserted into a unique column needs a random
+suffix (see `uniqueSuffix`). Do not add a global truncate — tests would then be unable to run
+concurrently against one database.
+
+### 3. Use em dashes, not `--`
 
 The prose in comments and docs uses `—`. There are zero occurrences of ` -- ` in the Go sources;
 keep it that way.
 
-### 3. Line endings are load-bearing
+### 4. Line endings are load-bearing
 
 `.gitattributes` pins them. `run.cmd` **must** be CRLF — cmd.exe truncates `REM` lines in an LF-only
 batch file and fails with `'M' is not recognized as an internal or external command`. `run.sh`,
 `Dockerfile`, and YAML **must** be LF. Don't "normalize" either one.
 
-### 4. Stdlib-first, and the omissions are deliberate
+### 5. Stdlib-first, and the omissions are deliberate
 
 No web framework (`net/http.ServeMux` with Go 1.22+ patterns is enough), no ORM (`database/sql` +
 `lib/pq`), no migration tool (a ~60-line hand-rolled runner in `internal/store/migrate.go`), no CSS
@@ -91,7 +124,7 @@ is insufficient**, and don't "modernize" these choices into a framework.
 `lib/pq` rather than `pgx` is a recorded constraint, not an oversight — see ARCHITECTURE.md before
 proposing a swap.
 
-### 5. Honesty about verification is a feature
+### 6. Honesty about verification is a feature
 
 README.md's verification table states exactly what has and hasn't been run, per component. This is
 one of the repo's most valuable documents. When you verify something new, **update that row**; when
@@ -101,13 +134,13 @@ actually done the thing.
 The same applies in code and docs: limitations are named in place (NPI shape-only checking, wide-CSV
 reduced fidelity, one inferred JSON field placement). Don't quietly delete those caveats.
 
-### 6. Documentation set
+### 7. Documentation set
 
 `README.md`, `SRS.md`, `ARCHITECTURE.md`, `UI-DESIGN.md`, `AUTH.md`, `DEPLOY.md` — all at repo root,
 cross-linked from README's documentation map. Keep them current with the code; a feature change that
 contradicts SRS.md means SRS.md needs updating in the same change.
 
-### 7. Security invariants
+### 8. Security invariants
 
 - Tokens: 256 bits from `crypto/rand`, **only the SHA-256 hash is stored**. Never persist a raw
   magic-link or session token.
@@ -116,7 +149,7 @@ contradicts SRS.md means SRS.md needs updating in the same change.
 - Sign-in must not reveal whether an address has an account.
 - All SQL uses bound parameters. No string-concatenated queries, ever.
 
-### 8. Template gotcha
+### 9. Template gotcha
 
 `html/template`'s `{{if}}` on a `*bool` tests non-nil only — it does **not** dereference. Any branch
 on a `*bool` (e.g. `ValidationRun.OverallPassed`, nil while a run is in progress) must use the

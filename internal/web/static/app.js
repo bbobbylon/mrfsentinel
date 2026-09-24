@@ -11,6 +11,28 @@
     return;
   }
 
+  // Announces completion into the banner's live region, then reloads.
+  //
+  // The reload on its own is silent to assistive technology: the page simply
+  // gets replaced, with nothing to say a result arrived. Writing into the
+  // #in-flight-banner element (role="status", so polite-live) gives a screen
+  // reader something to read out, and the short delay exists purely to let
+  // it do so — a reload fired in the same tick destroys the announcement
+  // before it is ever queued. Sighted users see the same text for the same
+  // moment, which is honest about what is happening rather than a blank
+  // pause.
+  function finishAndReload() {
+    var message = document.getElementById("in-flight-message");
+    if (!message) {
+      window.location.reload();
+      return;
+    }
+    message.textContent = "Check complete. Loading the results…";
+    setTimeout(function () {
+      window.location.reload();
+    }, 1000);
+  }
+
   function poll() {
     fetch(statusURL, { credentials: "same-origin" })
       .then(function (res) {
@@ -23,7 +45,7 @@
         if (data.status === "pending" || data.status === "running") {
           setTimeout(poll, 3000);
         } else {
-          window.location.reload();
+          finishAndReload();
         }
       })
       .catch(function () {

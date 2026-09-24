@@ -5,9 +5,13 @@
 <p class="muted">Started {{.Report.Run.StartedAt.Format "2006-01-02 15:04 MST"}}{{if .Report.Run.FinishedAt}} · finished {{.Report.Run.FinishedAt.Format "15:04 MST"}}{{end}}</p>
 
 {{if .InFlight}}
-  <div class="card banner banner-pending" id="in-flight-banner">
+  {{/* role="status" (implicitly aria-live="polite") so app.js can announce
+       completion before it reloads. Without it the reload is silent: a
+       screen-reader user gets a fresh page load with no indication that
+       anything finished, which is gap 2 in UI-DESIGN.md §5.4. */}}
+  <div class="card banner banner-pending" id="in-flight-banner" role="status">
     <strong>Checking this file now…</strong>
-    <p>Large hospital MRFs can take a while to stream and check. This page updates automatically once it's done.</p>
+    <p id="in-flight-message">Large hospital MRFs can take a while to stream and check. This page updates automatically once it's done.</p>
   </div>
   <script src="/static/app.js" data-run-status-url="/runs/{{.Report.Run.ID}}/status"></script>
 {{else if eq .Report.Run.Status "failed"}}
@@ -34,7 +38,7 @@
 
   <h2>Hospital-level checks</h2>
   <table class="report-table">
-    <thead><tr><th>Rule</th><th>Result</th><th>Detail</th></tr></thead>
+    <thead><tr><th scope="col">Rule</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
     <tbody>
       {{range .Report.HospitalChecks}}
       <tr>
@@ -48,7 +52,7 @@
 
   <h2>Item-level checks</h2>
   <table class="report-table">
-    <thead><tr><th>Rule</th><th>Compliance</th><th>Rows checked</th><th>Rows failed</th><th>Examples</th></tr></thead>
+    <thead><tr><th scope="col">Rule</th><th scope="col">Compliance</th><th scope="col">Rows checked</th><th scope="col">Rows failed</th><th scope="col">Examples</th></tr></thead>
     <tbody>
       {{range .Items}}
       <tr>
