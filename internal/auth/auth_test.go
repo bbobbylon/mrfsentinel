@@ -209,8 +209,10 @@ func TestClearSessionCookie_ExpiresImmediately(t *testing.T) {
 }
 
 // TestCookieShouldBeSecure covers the scheme check that decides the Secure
-// flag. The uppercase case is deliberately included and is called out below
-// as a known sharp edge rather than treated as correct behavior.
+// flag, including the spellings of an HTTPS URL that are legal but unusual.
+// Those used to be rejected, which silently downgraded the session cookie;
+// see the function's own comment for why the check is now lenient in this
+// one direction.
 func TestCookieShouldBeSecure(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -219,7 +221,11 @@ func TestCookieShouldBeSecure(t *testing.T) {
 	}{
 		{"production https URL", "https://app.example.com", true},
 		{"https with port and path", "https://app.example.com:8443/base", true},
+		{"uppercase scheme", "HTTPS://app.example.com", true},
+		{"mixed-case scheme", "HtTpS://app.example.com", true},
+		{"value with surrounding whitespace", "  https://app.example.com  ", true},
 		{"local development over http", "http://localhost:8080", false},
+		{"uppercase plain http", "HTTP://localhost:8080", false},
 		{"empty config value", "", false},
 		{"scheme-less host", "app.example.com", false},
 		{"http URL that merely mentions https", "http://https.example.com", false},
@@ -234,19 +240,30 @@ func TestCookieShouldBeSecure(t *testing.T) {
 	}
 }
 
-// TestCookieShouldBeSecure_UppercaseSchemeIsNotRecognised documents current
-// behavior, and documents it as a defect rather than a guarantee.
+// TestCookieShouldBeSecure_ProducesASecureCookieEndToEnd is the assertion
+// that actually matters, made against the cookie rather than the predicate.
 //
-// URL schemes are case-insensitive per RFC 3986, but CookieShouldBeSecure
-// does a plain strings.HasPrefix against the lowercase literal. A
-// PUBLIC_BASE_URL of "HTTPS://app.example.com" therefore yields a session
-// cookie with no Secure flag, sent in clear text over any downgraded
-// connection — the exact failure the flag exists to prevent. The fix is to
-// lowercase before comparing. This test asserts what the code does today so
-// the behavior is visible instead of latent; it should be inverted, not
-// deleted, when the function is fixed.
-func TestCookieShouldBeSecure_UppercaseSchemeIsNotRecognised(t *testing.T) {
-	if CookieShouldBeSecure("HTTPS://app.example.com") {
-		t.Skip("CookieShouldBeSecure now handles uppercase schemes — invert this test and delete the note above")
+// The point of the earlier table is only ever what it causes here: an HTTPS
+// deployment must produce a cookie carrying Secure, whatever legal spelling
+// PUBLIC_BASE_URL happens to use. This wires the two halves together the
+// way internal/web's handlers do, so a future refactor that keeps
+// CookieShouldBeSecure honest but stops passing its result along still
+// fails.
+func TestCookieShouldBeSecure_ProducesASecureCookieEndToEnd(t *testing.T) {
+	httpsSpellings := []string{
+		"https://app.example.com",
+		"HTTPS://app.example.com",
+		"  https://app.example.com  ",
+	}
+
+	for _, baseURL := range httpsSpellings {
+		t.Run(baseURL, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			SetSessionCookie(rec, "s", "raw", time.Hour, CookieShouldBeSecure(baseURL))
+
+			if c := readCookie(t, rec); !c.Secure {
+				t.Errorf("PUBLIC_BASE_URL %q produced a session cookie without Secure, so it would travel in clear text", baseURL)
+			}
+		})
 	}
 }

@@ -45,6 +45,20 @@ func ClearSessionCookie(w http.ResponseWriter, name string, secure bool) {
 // ever sent over HTTPS — correct for a real deployment, but it would break
 // local development over plain http://localhost, so this is derived from
 // config rather than hardcoded true.
+//
+// The input is lowercased and trimmed before the comparison, which is not
+// fussiness. Every way this check can fail to recognise an HTTPS URL has
+// the same consequence — a session cookie shipped without Secure, and so
+// sent in clear text over any downgraded connection — and PUBLIC_BASE_URL
+// is a hand-written environment variable. URL schemes are case-insensitive
+// per RFC 3986, so "HTTPS://app.example.com" is a perfectly legal spelling
+// that a plain prefix test would reject; leading whitespace is the other
+// easy way to get there, since a Compose file or ECS task definition will
+// happily pass through a value with a stray space. Both used to silently
+// downgrade the cookie. Erring toward recognising HTTPS is the safe
+// direction: the cost of a false positive is a cookie that a local
+// http://localhost session drops, which fails loudly at sign-in, while a
+// false negative is invisible.
 func CookieShouldBeSecure(publicBaseURL string) bool {
-	return strings.HasPrefix(publicBaseURL, "https://")
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicBaseURL)), "https://")
 }

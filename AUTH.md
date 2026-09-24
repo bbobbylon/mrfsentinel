@@ -88,7 +88,12 @@ per request) doesn't apply here, because a server-rendered app is already doing 
 trip on nearly every request anyway — there's no separate "stay stateless for performance" reason
 to give up instant revocation. `CookieShouldBeSecure()` gates the cookie's `Secure` flag on whether
 the app is running behind HTTPS (checked via `PublicBaseURL`'s scheme in `internal/config`), so
-local HTTP development still works while production cookies are marked `Secure`.
+local HTTP development still works while production cookies are marked `Secure`. That check
+lowercases and trims its input before comparing: URL schemes are case-insensitive per RFC 3986,
+and `PUBLIC_BASE_URL` is hand-written, so `HTTPS://…` or a value with a stray leading space used
+to be read as plain HTTP and silently ship a cookie with no `Secure` flag. Every way that check
+can fail has the same invisible consequence, so it errs toward recognising HTTPS — a false
+positive breaks local sign-in loudly, a false negative breaks nothing visibly.
 
 There's no refresh flow to reason about either — a session is valid until `SessionTTL`
 (`internal/config`, default in `docker-compose.yml`/`.env` examples) or until `Logout` deletes it,
