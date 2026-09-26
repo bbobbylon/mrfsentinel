@@ -6,6 +6,7 @@ package validation
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -18,14 +19,32 @@ import (
 // here is shared, read-only configuration — so one Worker is created once
 // in main() and reused for every run.
 type Worker struct {
-	store        *store.Store
-	maxMRFBytes  int64
-	fetchTimeout time.Duration
-	logger       *slog.Logger
+	store            *store.Store
+	maxMRFBytes      int64
+	fetchTimeout     time.Duration
+	allowPrivateAddr bool
+	logger           *slog.Logger
 }
 
-func NewWorker(st *store.Store, maxMRFBytes int64, fetchTimeout time.Duration, logger *slog.Logger) *Worker {
-	return &Worker{store: st, maxMRFBytes: maxMRFBytes, fetchTimeout: fetchTimeout, logger: logger}
+// NewWorker builds the single Worker that serves every validation run. It
+// is called once, from cmd/server/main.go, and the result is handed to
+// internal/web's Handlers — there is no per-run construction, because a
+// Worker holds no per-run state (see the type's doc comment).
+//
+// allowPrivateAddr comes from config's AllowPrivateMRFAddresses and is
+// passed straight through to mrf.Fetch on every run. It is a constructor
+// parameter rather than something read from the environment down in
+// internal/mrf so the setting stays visible at the one place that wires the
+// app together — the same reason every other dependency here is an argument
+// instead of a package-level global.
+func NewWorker(st *store.Store, maxMRFBytes int64, fetchTimeout time.Duration, allowPrivateAddr bool, logger *slog.Logger) *Worker {
+	return &Worker{
+		store:            st,
+		maxMRFBytes:      maxMRFBytes,
+		fetchTimeout:     fetchTimeout,
+		allowPrivateAddr: allowPrivateAddr,
+		logger:           logger,
+	}
 }
 
 // RunAsync starts validating hospital's MRF in a new goroutine and returns
@@ -44,6 +63,17 @@ func (w *Worker) RunAsync(hospital store.Hospital, runID string) {
 	go w.run(hospital, runID)
 }
 
+// run is the body of one validation job, executed on its own goroutine by
+// RunAsync: mark the run started, fetch and stream the hospital's MRF
+// (internal/mrf), score it against the CY2026 checklist (internal/rules),
+// translate that report into the store's row types, and persist the whole
+// thing in one transaction.
+//
+// Every failure path writes something to the database rather than only
+// logging it. The dashboard's sole window into this goroutine is the run's
+// status column, so a job that died quietly would leave the page showing
+// "Checking..." forever — which is exactly what happened before the
+// save-failure branch at the bottom of this function existed.
 func (w *Worker) run(hospital store.Hospital, runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), w.fetchTimeout)
 	defer cancel()
@@ -52,10 +82,10 @@ func (w *Worker) run(hospital store.Hospital, runID string) {
 		w.logger.Error("marking run running", "run_id", runID, "err", err)
 	}
 
-	src, closer, err := mrf.Fetch(ctx, hospital.MRFURL, w.maxMRFBytes)
+	src, closer, err := mrf.Fetch(ctx, hospital.MRFURL, w.maxMRFBytes, w.allowPrivateAddr)
 	if err != nil {
 		w.logger.Warn("fetching MRF failed", "hospital_id", hospital.ID, "url", hospital.MRFURL, "err", err)
-		if markErr := w.store.MarkRunErrored(context.Background(), runID, err.Error()); markErr != nil {
+		if markErr := w.store.MarkRunErrored(context.Background(), runID, publicFetchMessage(err)); markErr != nil {
 			w.logger.Error("marking run errored", "run_id", runID, "err", markErr)
 		}
 		return
@@ -98,4 +128,23 @@ func (w *Worker) run(hospital store.Hospital, runID string) {
 			w.logger.Error("marking run errored after save failure", "run_id", runID, "err", markErr)
 		}
 	}
+}
+
+// publicFetchMessage picks the text that goes into the run's error_message
+// column, which internal/web's run.html renders straight to the page.
+//
+// It is the boundary between what the log may say and what the user may see.
+// internal/mrf hands back a *mrf.FetchError carrying both halves; everything
+// else — an error type added later, a wrapped nil, anything unanticipated —
+// falls through to a fixed string rather than to err.Error(). That default
+// is the whole safety property: the old code interpolated err.Error()
+// directly, so "connect: connection refused" from 10.0.0.5:22 was published
+// on a page, and any new error path would have inherited the same leak
+// automatically. Here a new error path has to opt in to being shown.
+func publicFetchMessage(err error) string {
+	var fetchErr *mrf.FetchError
+	if errors.As(err, &fetchErr) && fetchErr.Public != "" {
+		return fetchErr.Public
+	}
+	return "The MRF could not be downloaded or read."
 }

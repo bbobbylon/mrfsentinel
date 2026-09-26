@@ -22,6 +22,11 @@ var pageFiles = []string{
 	"run.html",
 }
 
+// templateFuncs are the helper functions every page template can call. Kept
+// deliberately tiny: a template function is logic the Go type checker
+// cannot see into, so anything beyond formatting belongs in a handler or a
+// view struct instead, where a mistake is a compile error rather than a
+// runtime one.
 var templateFuncs = template.FuncMap{
 	"percent": func(rate float64) string { return fmt.Sprintf("%.0f%%", rate*100) },
 	// derefBool exists because html/template's {{if}} does NOT dereference
@@ -37,10 +42,21 @@ var templateFuncs = template.FuncMap{
 	"derefBool": func(b *bool) bool { return b != nil && *b },
 }
 
+// templates is the parsed, ready-to-render template set — one
+// *template.Template per page, keyed by that page's filename (see pageFiles
+// above for why they are not one shared set). It is built once by
+// loadTemplates at startup and only ever read afterwards, so it needs no
+// locking despite being shared by every concurrently-served request.
 type templates struct {
 	pages map[string]*template.Template
 }
 
+// loadTemplates parses every page in pageFiles together with layout.html,
+// returning an error if any of them is malformed. NewHandlers calls this at
+// startup precisely so a broken template kills the process immediately,
+// rather than 500-ing whichever request is first unlucky enough to render
+// it — the same reason you would rather a Spring context fail to start
+// than have a bean blow up on first use.
 func loadTemplates() (*templates, error) {
 	t := &templates{pages: make(map[string]*template.Template, len(pageFiles))}
 	for _, page := range pageFiles {

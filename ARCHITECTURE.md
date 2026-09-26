@@ -159,6 +159,96 @@ follows the pointer to check the boolean *underneath* it. A non-nil pointer to `
 comment for the underlying mechanism. Every template that renders a pass/fail badge from a `*bool`
 now calls `derefBool` explicitly rather than relying on bare `{{if}}`.
 
+## Migrations run under an advisory lock
+
+`Migrate` is called by `cmd/server` on every startup, and it is idempotent — it records each applied
+file in `schema_migrations` and skips what is already there. What it was *not*, until 2026-09-23, was
+safe to run from two processes at once against a database that has no schema yet.
+
+The trap is that `CREATE TABLE IF NOT EXISTS` reads as atomic and is not. Two sessions can both
+evaluate the "if not exists" check, both find nothing, and both proceed to create; one wins and the
+other fails with `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`. The
+same applies to the enum type created in `0001_init.sql`. Postgres documents this: the check and the
+creation are not performed as a single atomic step, so `IF NOT EXISTS` protects against a table that
+already existed, not against one being created right now.
+
+This surfaced from the test suite rather than from production, because `go test ./...` runs each
+package's binary concurrently and both `internal/store` and `internal/validation` migrate on the way
+in. It is a production property all the same: two ECS tasks starting together take exactly the same
+path, which matters the moment the service in `DEPLOY.md` scales past one task.
+
+`Migrate` now takes `pg_advisory_lock` before touching anything, including the `schema_migrations`
+table itself, and releases it at the end. Two details matter in that implementation:
+
+- The lock is taken on a **dedicated `*sql.Conn`**, not through the pool. `pg_advisory_lock` is
+  session-scoped, and a pooled `*sql.DB` gives no guarantee that the unlock statement runs on the
+  same connection that took the lock.
+- The unlock runs on `context.Background()`, not the caller's context, and before the connection is
+  returned to the pool. `database/sql` does not reset session state on release, so a lock left
+  behind would strand that pooled connection for the life of the process.
+
+The loser of the race no longer errors — it blocks, then finds the migrations already recorded and
+skips them, which is the behavior the idempotency was supposed to give in the first place.
+
+## The MRF downloader only dials the public internet
+
+The URL a run fetches is typed in by a user. Until 2026-09-25 `internal/mrf.Fetch` handed it to
+`http.DefaultClient` unchanged, with the only validation a `strings.HasPrefix` scheme check in the
+dashboard handler. That is textbook server-side request forgery (CWE-918): anyone who could sign up
+could add a hospital pointing at `http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+and have this server fetch it from inside its own VPC, then read the outcome off the report page.
+
+The fix has two halves, and the second is not optional.
+
+**Where the check goes.** It is a `net.Dialer.Control` hook, not a check on the URL at submit time.
+A submit-time check validates a *hostname*, and a hostname is not a destination. The same name can
+resolve to a public address while it is being validated and to a link-local one when it is fetched
+— DNS rebinding, and the window is as wide as the queue between the two. A redirect is the same
+problem without the DNS: a public host answers `302 Location: http://10.0.0.5/`, and a check that
+ran once on the submitted URL never sees it.
+
+`Control` runs after resolution and before `connect(2)`, once per connection, and it is handed the
+numeric address. There is no gap between the decision and the use, and because every redirect hop
+opens its own connection, the hop that matters is checked on its own terms rather than inherited
+from the first one. `CheckRedirect` also caps the chain at five hops and re-checks the scheme, but
+that is belt-and-braces: the address check is what carries the property.
+
+The ranges refused are loopback, unspecified, RFC 1918 private and IPv6 unique-local, link-local
+unicast and multicast (which is how `169.254.169.254` is caught — by range, not by a hardcoded
+address), all multicast, carrier-grade NAT `100.64.0.0/10` (Alibaba Cloud's metadata endpoint lives
+at `100.100.100.200`), and the reserved/documentation/benchmarking blocks. Addresses are `Unmap`ed
+first, because `::ffff:127.0.0.1` is a legal way to write loopback that none of the IPv6 predicates
+would otherwise match.
+
+**What the failure says.** Blocking the connection stops the request; it does not stop the *answer*
+leaking. The worker used to store `err.Error()` in the run's `error_message`, and `run.html` renders
+that column. Left alone, the report page would still distinguish "connection refused" (nothing is
+listening there) from a read timeout (a firewall ate it) from "blocked" (that address is internal) —
+three different answers that together map a private network, just more slowly than `nmap` would.
+
+So `internal/mrf` returns a `*FetchError` carrying two strings: `Public`, which goes in the database
+and onto the page, and the wrapped `Err`, which goes to the structured log. Every network-level
+failure collapses to one `Public` message. The HTTP status of a response that did arrive is kept,
+because once the filter is in place a response can only have come from a host the user could have
+fetched themselves, and "your URL returns 403" is the most useful thing this app can tell someone
+whose MRF sits behind a login. `internal/validation`'s `publicFetchMessage` is the one place the two
+halves are pulled apart, and it defaults to a fixed string for any error that is not a `*FetchError`
+— so a failure path added later has to opt in to being shown rather than opt out of leaking.
+
+**Two deliberate omissions.** The port is not restricted to 80/443: a hospital publishing on `:8443`
+is plausible, and with private addresses already refused, an unusual port on a public host buys an
+attacker nothing they could not get from their own machine. And the client ignores `HTTP_PROXY` /
+`HTTPS_PROXY`, which `http.DefaultTransport` would honour. With a proxy in the path every connection
+dials the proxy, so `Control` would be inspecting the proxy's address while the proxy resolved and
+reached the real target — the filter would pass everything and protect nothing. Dropping proxy
+support makes that visible instead of silent; a deployment that needs one has to put the equivalent
+rule in its egress policy.
+
+`ALLOW_PRIVATE_MRF_ADDRESSES=true` turns the filter off, and defaults to false. It exists because
+loopback is exactly where a test server lives — `internal/validation`'s end-to-end test serves its
+fixture from `httptest` on 127.0.0.1 — and because pointing local dev at a file server on localhost
+is the same shape. It should never be set anywhere untrusted users can add a hospital.
+
 ## Auth
 
 Magic-link email only — no passkeys. See `AUTH.md` for the full flow and why this project doesn't
@@ -166,15 +256,20 @@ need the second auth method DeleteBoard has.
 
 ## What's intentionally *not* here yet
 
-- **No automated tests for `internal/store`, `internal/auth`, `internal/validation`, or
-  `internal/web`.** `internal/mrf` and `internal/rules` have real unit tests (pure logic, no
-  external dependencies). The other four packages talk to Postgres, SMTP, cookies, and HTTP — they
-  were verified by actually running the compiled binary end-to-end against a real local Postgres
-  instance instead (see `README.md`'s verification table), which is how two genuine bugs got
-  caught, but that's a one-time manual pass, not a regression-proof test suite. The natural next
-  step is integration tests that spin up a disposable Postgres per run — CI already does this for
-  `go test` via a `services:` container (`.github/workflows/ci.yml`); the missing piece is writing
-  the tests themselves, not the infrastructure to run them.
+- **No tests for `cmd/server`.** Every `internal/` package now has a test file; `cmd/server` does
+  not. It is wiring — read config, open the database, migrate, construct the handlers, listen — and
+  testing it would mostly assert that the constructor calls happen in the order they are written
+  on the screen above. The behavior that matters is covered a layer down. What this does leave
+  unguarded is startup *ordering* (Open, then Migrate, then NewStore) and the shutdown path.
+
+  The other packages got their tests on 2026-09-23. Of note in how they are built: `internal/store`
+  and `internal/validation` talk to a real Postgres rather than a mock, because what is worth
+  testing about them *is* the SQL — an ownership filter that lives inside a `WHERE` clause cannot
+  be verified against a fake. CI already provides that database through a `services:` container.
+  Those suites skip when `DATABASE_URL` is unset, so a developer without a database still gets a
+  green `go test ./...`, but they **fail** rather than skip when `DATABASE_URL` is set and
+  unreachable — otherwise a broken CI database would quietly retire them and leave a green tick
+  meaning nothing.
 - **No distributed run queue.** `RunAsync` is a bare goroutine on whichever process instance
   received the request. Fine for a single running instance; would need a real queue (or at least a
   `SELECT ... FOR UPDATE SKIP LOCKED` claim pattern against `validation_runs`) before running

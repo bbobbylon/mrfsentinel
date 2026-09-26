@@ -14,7 +14,7 @@
   --pass-bg: #e6f5ea;
   --fail: #b3261e;
   --fail-bg: #fbe9e8;
-  --pending: #9a6b00;
+  --pending: #855c00;
   --pending-bg: #fdf1d6;
   --muted-badge-bg: #eceff2;
 }
@@ -31,6 +31,40 @@ body {
 
 a { color: var(--brand); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* Skip link (see layout.html). Positioned off-screen rather than hidden
+   with display:none or visibility:hidden — both of those remove an element
+   from the focus order entirely, which would defeat the point. It pulls
+   itself into the top-left corner only once focused. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: 0.6rem 1rem;
+  background: var(--card-bg);
+  color: var(--brand);
+  font-weight: 600;
+  border: 2px solid var(--brand);
+  border-radius: 0 0 6px 0;
+}
+.skip-link:focus { left: 0; }
+
+/* One deliberate focus ring for everything focusable, replacing the
+   browser default. :focus-visible rather than :focus so it appears for
+   keyboard navigation but not on mouse clicks. The outline sits outside the
+   element via the offset so it stays legible on the brand-colored button,
+   where a default ring drawn on the fill can disappear into it. */
+:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The skip link and <main> are focus targets for navigation, not controls —
+   a ring around the whole main region reads as a glitch rather than as
+   feedback, and the skip link already announces itself by appearing. */
+#main-content:focus-visible { outline: none; }
 
 .topbar {
   display: flex;

@@ -23,6 +23,24 @@ NC='\033[0m'
 APP_URL="http://localhost:8080"
 HEALTH_URL="$APP_URL/healthz"
 
+# Preflight. Without this, a missing tool surfaces several steps in as a bare
+# "go: command not found" from inside a build step, which says nothing about
+# what to install. Checking up front costs nothing and the message is
+# actionable.
+MISSING=""
+command -v go >/dev/null 2>&1 || MISSING="$MISSING
+  - go        https://go.dev/dl/                 (this project needs Go 1.24+)"
+command -v docker >/dev/null 2>&1 || MISSING="$MISSING
+  - docker    https://docs.docker.com/get-docker/ (runs Postgres and Mailhog)"
+command -v curl >/dev/null 2>&1 || MISSING="$MISSING
+  - curl      https://curl.se/download.html      (polls the health endpoint)"
+if [ -n "$MISSING" ]; then
+    echo -e "${COLOR_RED}Can't start — these aren't on your PATH:${NC}$MISSING"
+    echo
+    echo "Install the missing tool(s), open a new shell so PATH updates, and re-run this script."
+    exit 1
+fi
+
 echo -e "${COLOR_YELLOW}[1/3] Starting Postgres and Mailhog...${NC}"
 if docker compose up -d --wait postgres mailhog; then
     echo -e "${COLOR_GREEN}Postgres and Mailhog are healthy.${NC}\n"

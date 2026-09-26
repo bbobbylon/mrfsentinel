@@ -1,0 +1,32 @@
+# Line endings are not cosmetic here — two files in this repo break outright
+# with the wrong ones, so they are pinned rather than left to each developer's
+# core.autocrlf setting.
+#
+#   run.cmd  MUST be CRLF. cmd.exe mis-parses an LF-only batch file: REM lines
+#            get truncated mid-token and surface as "'M' is not recognized as
+#            an internal or external command". Observed, not theoretical.
+#   run.sh   MUST be LF. A shebang line ending in CR makes the kernel look for
+#            an interpreter literally named "bash\r", which does not exist.
+#            Same for anything that runs inside the Linux containers.
+
+# Let Git decide what is text, and normalize to LF in the repository.
+* text=auto eol=lf
+
+# Windows-only scripts: checked out with CRLF everywhere.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Scripts that run under a shell — including inside Docker images built from
+# this repo — must keep LF even when checked out on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary files Git should never try to normalize.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary

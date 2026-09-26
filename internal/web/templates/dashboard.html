@@ -9,13 +9,17 @@
 {{else}}
   <table class="report-table">
     <thead>
-      <tr><th>Hospital</th><th>MRF URL</th><th>Latest check</th></tr>
+      <tr><th scope="col">Hospital</th><th scope="col">MRF URL</th><th scope="col">Latest check</th></tr>
     </thead>
     <tbody>
       {{range .Hospitals}}
       <tr>
         <td><a href="/hospitals/{{.ID}}">{{.Name}}</a></td>
-        <td class="mono truncate"><a href="{{.MRFURL}}" target="_blank" rel="noopener">{{.MRFURL}}</a></td>
+        {{/* .truncate ellipsizes long MRF URLs at 320px, so the title
+             attribute is the only way to recover the full value without
+             opening the link — hospital MRF URLs are routinely long enough
+             that the visible portion is all boilerplate path. */}}
+        <td class="mono truncate"><a href="{{.MRFURL}}" title="{{.MRFURL}}" target="_blank" rel="noopener">{{.MRFURL}}</a></td>
         <td>
           {{if not .LatestRun}}
             <span class="badge badge-muted">Never checked</span>

@@ -10,6 +10,11 @@ import (
 // their sources) — not real hospital data, just enough to exercise every
 // field this package reads.
 
+// sampleJSON exercises the JSON reader end to end: every metadata key
+// openJSON knows, an item with two payer-plans (which must flatten to two
+// Rows), and a deliberately empty item with no codes and no charges at all,
+// which must still yield one Row so that a genuinely missing charge block
+// surfaces as a finding rather than vanishing.
 const sampleJSON = `{
   "hospital_name": "Test General Hospital",
   "last_updated_on": "2026-06-01",
@@ -54,6 +59,11 @@ const sampleJSON = `{
   ]
 }`
 
+// TestOpenJSON_MetadataAndRows checks the whole JSON path: format
+// detection through Open, every metadata field, and the item-to-Row
+// flattening — including that an item carrying no charges still produces a
+// row, and that Next eventually reports ErrDone rather than hanging or
+// repeating.
 func TestOpenJSON_MetadataAndRows(t *testing.T) {
 	src, err := Open(strings.NewReader(sampleJSON))
 	if err != nil {
@@ -119,18 +129,31 @@ func TestOpenJSON_MetadataAndRows(t *testing.T) {
 	}
 }
 
+// TestOpenJSON_RejectsNonObject checks that a file which is valid JSON but
+// the wrong shape (a top-level array) is rejected at open time. This is the
+// distinction ParseError exists for: the file is structurally wrong, which
+// is a parse failure, not a compliance finding to score row by row.
 func TestOpenJSON_RejectsNonObject(t *testing.T) {
 	if _, err := Open(strings.NewReader(`[1,2,3]`)); err == nil {
 		t.Fatal("Open() on a top-level JSON array: want error, got nil")
 	}
 }
 
+// sampleCSVTall is a tall-format CSV: the four-row shape CMS specifies (two
+// metadata rows, one item header row, then data), with a fully populated
+// row followed by one whose charge columns are all blank — enough to prove
+// that a missing cell parses as absent rather than as zero.
 const sampleCSVTall = "hospital_name,last_updated_on,version,license_number | CA,type_2_npi,attester_name,attestation\n" +
 	"Test General Hospital,2026-06-01,3.0,12345,1234567890,\"Jane Doe, CEO\",\"true, accurate, and complete\"\n" +
 	"description,code | 1,code | 1 | type,setting,standard_charge | gross,standard_charge | discounted_cash,payer_name,plan_name,standard_charge | negotiated_dollar,standard_charge | min,standard_charge | max,median_amount,10th_percentile,90th_percentile,count\n" +
 	"Basic metabolic panel,80048,CPT,outpatient,200.0,150.0,Acme Health,PPO Gold,175.5,50.0,300.0,170.0,120.0,250.0,42\n" +
 	"Comprehensive panel,80053,CPT,outpatient,,,Acme Health,PPO Gold,,,,,,,\n"
 
+// TestOpenCSV_Tall_MetadataAndRows checks that the tall layout is detected
+// (it has a payer_name column), that the pipe-encoded metadata headers are
+// unpacked correctly, and that a blank charge cell comes back as a nil
+// pointer — the property the entire checklist depends on to tell "not
+// reported" apart from "reported as $0".
 func TestOpenCSV_Tall_MetadataAndRows(t *testing.T) {
 	src, err := Open(strings.NewReader(sampleCSVTall))
 	if err != nil {
@@ -181,11 +204,20 @@ func TestOpenCSV_Tall_MetadataAndRows(t *testing.T) {
 	}
 }
 
+// sampleCSVWide is the same data in the wide layout: no payer_name column,
+// and each payer-plan's figures carried in its own pipe-named columns. This
+// is what openCSV's format detection has to tell apart from the tall sample
+// above.
 const sampleCSVWide = "hospital_name,last_updated_on,version\n" +
 	"Test General Hospital,2026-06-01,3.0\n" +
 	"description,code | 1,code | 1 | type,setting,standard_charge | gross,standard_charge | discounted_cash,standard_charge | Acme Health | PPO Gold | negotiated_dollar,median_amount | Acme Health | PPO Gold,10th_percentile | Acme Health | PPO Gold,90th_percentile | Acme Health | PPO Gold,count | Acme Health | PPO Gold\n" +
 	"Basic metabolic panel,80048,CPT,outpatient,200.0,150.0,175.5,170.0,120.0,250.0,42\n"
 
+// TestOpenCSV_Wide_DetectsFormatAndAggregates pins the wide format's
+// deliberately reduced fidelity: the absence of a payer_name column selects
+// the wide path, and the per-payer columns collapse into a presence-only
+// answer rather than expanding into one Row per payer. See csv.go's Next
+// and ARCHITECTURE.md for why that trade is intentional.
 func TestOpenCSV_Wide_DetectsFormatAndAggregates(t *testing.T) {
 	src, err := Open(strings.NewReader(sampleCSVWide))
 	if err != nil {

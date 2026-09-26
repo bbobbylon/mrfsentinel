@@ -31,6 +31,11 @@ import "fmt"
 // guessed.
 type Format string
 
+// The three formats CMS actually permits, plus FormatUnknown for a file
+// whose shape could not be determined at all (see sniff.go's Open, which is
+// what decides). These are the values stored in a validation run's `format`
+// column and shown on the report page, so they are stable strings rather
+// than an iota-based enum whose numbers would shift if one were inserted.
 const (
 	FormatJSON    Format = "json"
 	FormatCSVTall Format = "csv_tall"
@@ -153,6 +158,12 @@ type ParseError struct {
 	Err    error
 }
 
+// Error renders the failure with the line number when one is known. A
+// hospital's compliance officer reading this on the report page is being
+// pointed at a specific spot in a file that may be millions of lines long,
+// so "at line 412,907" is the difference between an actionable message and
+// a useless one; Line is 0 when the failure was structural (see openCSV,
+// which cannot attribute a missing header row to a data line).
 func (e *ParseError) Error() string {
 	if e.Line > 0 {
 		return fmt.Sprintf("mrf: %s parse error at line %d: %v", e.Format, e.Line, e.Err)
@@ -160,4 +171,8 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("mrf: %s parse error: %v", e.Format, e.Err)
 }
 
+// Unwrap exposes the underlying cause to errors.Is and errors.As, so a
+// caller can still match on, say, an io.ErrUnexpectedEOF buried inside this
+// wrapper. This is Go's equivalent of a Java exception's getCause(), except
+// that the standard library's matching helpers walk the chain for you.
 func (e *ParseError) Unwrap() error { return e.Err }

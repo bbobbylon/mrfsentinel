@@ -37,6 +37,11 @@ var wideColumnPattern = regexp.MustCompile(
 // than one billing code per item, e.g. a CPT code and an NDC code together).
 var codeColumnPattern = regexp.MustCompile(`^code \| (\d+)$`)
 
+// csvSource streams a CSV-formatted MRF in either of CMS's two layouts. It
+// holds only what is needed to interpret the next row — the column-index
+// map built from the header, and the running line count — never the rows
+// themselves, which is what keeps memory flat across a multi-gigabyte file
+// (see the package doc comment in types.go).
 type csvSource struct {
 	format   Format
 	meta     Metadata
@@ -118,7 +123,15 @@ func openCSV(r io.Reader) (*csvSource, error) {
 	}, nil
 }
 
-func (s *csvSource) Format() Format     { return s.format }
+// Format reports which CSV layout openCSV detected, tall or wide. It is
+// fixed at open time, from the header row, and never changes as rows are
+// read.
+func (s *csvSource) Format() Format { return s.format }
+
+// Metadata returns the hospital-level fields parsed from the file's first
+// two rows. Available immediately after openCSV returns, before any row has
+// been read, which is what lets internal/rules score the hospital-level
+// checklist without waiting for the whole file.
 func (s *csvSource) Metadata() Metadata { return s.meta }
 
 // ErrDone is returned by Source.Next once every row has been read — analogous
@@ -127,6 +140,17 @@ func (s *csvSource) Metadata() Metadata { return s.meta }
 // reaching into this package's choice of underlying reader.
 var ErrDone = io.EOF
 
+// Next reads and interprets one CSV data row, returning ErrDone once the
+// file is exhausted. Columns are looked up by name through the header map
+// built at open time, and a column the file simply does not have reads as
+// an empty cell rather than an error — a missing field is a compliance
+// finding for internal/rules to report, not a parse failure.
+//
+// The two layouts diverge only at the bottom of this function: a tall row
+// already describes exactly one payer-plan, while a wide row is collapsed
+// into a presence-only answer across all of its payer-plan column pairs.
+// See the comment on that branch, and ARCHITECTURE.md, for why the wide
+// format is deliberately checked at lower fidelity.
 func (s *csvSource) Next() (Row, error) {
 	record, err := s.reader.Read()
 	if err != nil {
@@ -208,6 +232,11 @@ func (s *csvSource) Next() (Row, error) {
 	return row, nil
 }
 
+// anyNonEmpty reports whether any of the given column indexes holds a
+// non-blank cell in this record, tolerating indexes past the end of a short
+// row (see openCSV's FieldsPerRecord note — real hospital CSVs are not
+// uniformly wide). It is what backs the wide format's aggregate
+// "is there negotiated-charge data anywhere on this line" check.
 func anyNonEmpty(record []string, cols []int) bool {
 	for _, i := range cols {
 		if i < len(record) && strings.TrimSpace(record[i]) != "" {
@@ -217,6 +246,15 @@ func anyNonEmpty(record []string, cols []int) bool {
 	return false
 }
 
+// parseCSVMetadata pairs the file's first row (hospital-level column names)
+// with its second (that row's values) into a Metadata.
+//
+// Three fields need more than a straight name lookup, because CMS's CSV
+// dictionary encodes information in the column name itself: license_number
+// carries the issuing state after a pipe, type_2_npi can repeat across
+// several columns, and the attestation column's name varies enough between
+// real files that this matches on it loosely and then interprets the value.
+// A JSON file states all three explicitly instead — compare openJSON.
 func parseCSVMetadata(header, values []string) Metadata {
 	get := func(name string) string {
 		for i, h := range header {
@@ -270,6 +308,12 @@ func parseCSVMetadata(header, values []string) Metadata {
 	return meta
 }
 
+// parseFloatCell converts a currency cell to a *float64, returning nil for
+// anything blank or unparseable. Nil rather than 0 is the whole point: the
+// checklist's question is "did the hospital report this charge at all,"
+// and a zero-valued charge is a genuinely different answer from a missing
+// one. A leading "$" is tolerated because real files include it despite the
+// data dictionary asking for a bare number.
 func parseFloatCell(s string) *float64 {
 	if s == "" {
 		return nil
@@ -281,6 +325,9 @@ func parseFloatCell(s string) *float64 {
 	return &f
 }
 
+// parseIntCell is parseFloatCell for whole-number cells — currently just
+// the CY2026 allowed-amount `count` — with the same nil-means-absent
+// contract.
 func parseIntCell(s string) *int {
 	if s == "" {
 		return nil

@@ -15,6 +15,11 @@ type baseData struct {
 	User *store.User
 }
 
+// authedData wraps a signed-in user in the baseData every page's data
+// struct embeds. Taking store.User by value and returning a pointer to that
+// copy is deliberate: it gives layout.html's {{with .User}} a non-nil
+// pointer to branch on (see baseData above) without handing a template a
+// pointer into the caller's own variable.
 func authedData(user store.User) baseData {
 	return baseData{User: &user}
 }

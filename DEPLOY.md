@@ -118,6 +118,14 @@ rather than plain `environment` entries — task definition JSON distinguishes t
 different keys, and only `secrets` entries are safe for anything sensitive, since plain
 `environment` values are visible to anyone who can read the task definition.
 
+Leave `ALLOW_PRIVATE_MRF_ADDRESSES` unset. It defaults to `false`, and false is what keeps a
+user-supplied MRF URL from being fetched out of the VPC — including `169.254.169.254`, the task's own
+credentials endpoint. The variable exists for local development against a file server on localhost;
+there is no deployment reason to set it. Note also that the downloader ignores `HTTP_PROXY` and
+`HTTPS_PROXY` by design: the address check inspects what is actually dialed, and a proxy in the path
+would move resolution somewhere it cannot see. If egress has to go through a proxy, the equivalent
+rule belongs in that proxy's policy — see `ARCHITECTURE.md`.
+
 Start with `desiredCount: 1`. See `ARCHITECTURE.md`'s note on the background validation worker
 before scaling past one task — right now a validation run is processed in-process by whichever
 task instance received the `TriggerRun` request, with no distributed queue, so multiple tasks

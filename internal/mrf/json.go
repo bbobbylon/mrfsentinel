@@ -12,22 +12,38 @@ import (
 // confirmed field by field for every field this package reads. The one
 // exception is noted on jsonPayerInformation.EstimatedAmount below.
 
+// jsonLicenseInformation is the file's `license_information` object, mapped
+// onto Metadata.LicenseNumber and LicenseState by openJSON.
 type jsonLicenseInformation struct {
 	LicenseNumber string `json:"license_number"`
 	State         string `json:"state"`
 }
 
+// jsonAttestation is the file's `attestation` object — the CY2026 addition
+// this whole product exists to help a hospital get right before a named
+// senior officer signs it. Note the struct field named Statement maps to a
+// JSON key also called "attestation", nested inside the object of the same
+// name; that repetition is CMS's, not a mistake here.
 type jsonAttestation struct {
 	Statement    string `json:"attestation"`
 	Confirmed    bool   `json:"confirm_attestation"`
 	AttesterName string `json:"attester_name"`
 }
 
+// jsonCode is one entry of an item's `code_information` array: a billing
+// code and the code system it belongs to. Flattened into the exported Code
+// type by flattenItem.
 type jsonCode struct {
 	Code string `json:"code"`
 	Type string `json:"type"`
 }
 
+// jsonPayerInformation is one payer-plan's charges for an item — the
+// innermost level of the JSON format's three-deep nesting (item → standard
+// charge → payer), and the level that corresponds to a single exported Row.
+// Every amount is a pointer so that "absent" stays distinguishable from
+// "reported as zero"; see parseFloatCell in csv.go for the same reasoning on
+// the CSV side.
 type jsonPayerInformation struct {
 	PayerName             string   `json:"payer_name"`
 	PlanName              string   `json:"plan_name"`
@@ -52,6 +68,10 @@ type jsonPayerInformation struct {
 	EstimatedAmount *float64 `json:"estimated_amount"`
 }
 
+// jsonStandardCharge is one care setting's charges for an item (inpatient
+// or outpatient), holding the charges that do not vary by payer — gross,
+// discounted cash, and the de-identified min/max — plus the per-payer array
+// beneath it.
 type jsonStandardCharge struct {
 	GrossCharge       *float64               `json:"gross_charge"`
 	DiscountedCash    *float64               `json:"discounted_cash"`
@@ -61,6 +81,10 @@ type jsonStandardCharge struct {
 	PayersInformation []jsonPayerInformation `json:"payers_information"`
 }
 
+// jsonItem is one element of the top-level `standard_charge_information`
+// array: a single item or service, its billing codes, and its charges
+// across every setting and payer. This is the unit jsonSource decodes one
+// at a time, and the only part of a real file large enough to matter.
 type jsonItem struct {
 	Description     string               `json:"description"`
 	CodeInformation []jsonCode           `json:"code_information"`
@@ -184,9 +208,25 @@ func openJSON(r io.Reader) (*jsonSource, error) {
 	return src, nil
 }
 
-func (s *jsonSource) Format() Format     { return FormatJSON }
+// Format always reports FormatJSON. Unlike the CSV side, there is no
+// layout variation to detect here — CMS specifies exactly one JSON shape.
+func (s *jsonSource) Format() Format { return FormatJSON }
+
+// Metadata returns the hospital-level fields captured while scanning
+// towards the standard_charge_information array. See openJSON's doc comment
+// for the one case where this can come back incomplete: metadata keys the
+// file places after that array are never reached.
 func (s *jsonSource) Metadata() Metadata { return s.meta }
 
+// Next returns the next flattened Row, decoding another item from the
+// array whenever the pending buffer runs dry, and ErrDone once the array is
+// closed.
+//
+// The pending slice is what reconciles two different shapes: the JSON
+// format nests many payer-plans inside one item, while a Row is one
+// payer-plan. Decoding an item therefore produces several Rows at once (see
+// flattenItem), which are handed out one call at a time. Only the item
+// currently being drained is ever in memory — never the array.
 func (s *jsonSource) Next() (Row, error) {
 	for len(s.pending) == 0 {
 		if s.exhausted {

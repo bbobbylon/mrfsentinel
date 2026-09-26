@@ -2,8 +2,8 @@
 # the whole app, frontend included via go:embed, is a single static binary in a single image),
 # pushes it to ECR, and rolls the one ECS Fargate service forward. See DEPLOY.md for the one-time
 # AWS setup this depends on (an OIDC-trusted IAM role, the ECR repo, the ECS cluster/service) —
-# none of that exists until you provision it, so this workflow will fail at "configure AWS
-# credentials" on a fresh clone. That's expected, not a bug in the workflow.
+# none of that exists until you provision it, so on a fresh clone this workflow **skips** rather
+# than running. See the `if:` guard on the deploy job below for what turns it on.
 #
 # Compare to DeleteBoard's cd.yml, which builds and deploys two images (backend + frontend) to two
 # ECS services behind one ALB. This project only needs one of each, because there's no separate
@@ -37,8 +37,28 @@ env:
 jobs:
   deploy:
     name: Build, push, and deploy
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`: GitHub begins migrating that label to
+    # Ubuntu 26 on 2026-10-19, and a major image change lands as a surprise red
+    # run on whatever gets pushed that day. Bumping this is then a deliberate
+    # one-line commit that can be reverted, instead of an image swap nobody
+    # chose. Revisit once 26.04 has settled.
+    runs-on: ubuntu-24.04
     environment: production # optional manual-approval gate — configure under repo Settings → Environments
+
+    # Skip cleanly instead of failing when the AWS infrastructure this needs
+    # doesn't exist yet. Before this guard, every single push to main produced
+    # a red CD run that died at "Configure AWS credentials" with "Input
+    # required and not supplied: aws-region" — a permanently broken-looking
+    # repository that was in fact behaving exactly as documented above. A
+    # skipped job reports as neutral, so a green checkmark keeps meaning
+    # something.
+    #
+    # Set the repository variables AWS_REGION and ECS_CLUSTER (Settings →
+    # Secrets and variables → Actions → Variables), plus the AWS_DEPLOY_ROLE_ARN
+    # secret, and this job starts running. Note the condition can only test
+    # `vars`: GitHub does not expose the `secrets` context to a job-level `if`.
+    if: vars.AWS_REGION != '' && vars.ECS_CLUSTER != ''
+
     steps:
       - uses: actions/checkout@v7
 
