@@ -22,6 +22,7 @@ var allEnvKeys = []string{
 	"SESSION_TTL_HOURS",
 	"MAX_MRF_MEBIBYTES",
 	"FETCH_TIMEOUT_MINUTES",
+	"ALLOW_PRIVATE_MRF_ADDRESSES",
 }
 
 // clearEnv blanks every variable in allEnvKeys for the duration of one
@@ -199,5 +200,69 @@ func TestLoad_EmptyValuesFallBackToDefaults(t *testing.T) {
 	}
 	if cfg.SMTPPort != 1025 {
 		t.Errorf("empty SMTP_PORT gave %d, want the default 1025", cfg.SMTPPort)
+	}
+}
+
+// TestLoad_AllowPrivateMRFAddressesDefaultsToFalse is the one default here
+// that is a security control rather than a convenience. Everything else in
+// TestLoad_Defaults would merely be inconvenient if it drifted; this one
+// decides whether an unconfigured deployment will fetch a user-supplied URL
+// pointing at its own network (see internal/mrf/fetch.go), so it gets its
+// own test naming what it protects.
+func TestLoad_AllowPrivateMRFAddressesDefaultsToFalse(t *testing.T) {
+	clearEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.AllowPrivateMRFAddresses {
+		t.Error("AllowPrivateMRFAddresses defaults to true — an unconfigured deployment would fetch user-supplied URLs pointing at its own network")
+	}
+}
+
+// TestLoad_AllowPrivateMRFAddressesAcceptsBoolSpellings covers the spellings
+// strconv.ParseBool takes, which is what an operator enabling the local-dev
+// escape hatch will actually type.
+func TestLoad_AllowPrivateMRFAddressesAcceptsBoolSpellings(t *testing.T) {
+	tests := map[string]bool{
+		"true":  true,
+		"TRUE":  true,
+		"True":  true,
+		"1":     true,
+		"t":     true,
+		"false": false,
+		"FALSE": false,
+		"0":     false,
+		"f":     false,
+	}
+
+	for value, want := range tests {
+		t.Run(value, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ALLOW_PRIVATE_MRF_ADDRESSES", value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() returned error for %q: %v", value, err)
+			}
+			if cfg.AllowPrivateMRFAddresses != want {
+				t.Errorf("ALLOW_PRIVATE_MRF_ADDRESSES=%q gave %v, want %v", value, cfg.AllowPrivateMRFAddresses, want)
+			}
+		})
+	}
+}
+
+// TestLoad_RejectsAnUnparseableBool mirrors the fail-fast behaviour already
+// asserted for the integer settings. It matters more here: "yes" and "on"
+// are the obvious things to write and neither is a Go boolean, and a silent
+// fallback would leave an operator debugging a fetch that keeps failing for
+// no visible reason.
+func TestLoad_RejectsAnUnparseableBool(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ALLOW_PRIVATE_MRF_ADDRESSES", "yes")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted ALLOW_PRIVATE_MRF_ADDRESSES=yes instead of naming the typo")
 	}
 }

@@ -190,6 +190,65 @@ table itself, and releases it at the end. Two details matter in that implementat
 The loser of the race no longer errors — it blocks, then finds the migrations already recorded and
 skips them, which is the behavior the idempotency was supposed to give in the first place.
 
+## The MRF downloader only dials the public internet
+
+The URL a run fetches is typed in by a user. Until 2026-09-25 `internal/mrf.Fetch` handed it to
+`http.DefaultClient` unchanged, with the only validation a `strings.HasPrefix` scheme check in the
+dashboard handler. That is textbook server-side request forgery (CWE-918): anyone who could sign up
+could add a hospital pointing at `http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+and have this server fetch it from inside its own VPC, then read the outcome off the report page.
+
+The fix has two halves, and the second is not optional.
+
+**Where the check goes.** It is a `net.Dialer.Control` hook, not a check on the URL at submit time.
+A submit-time check validates a *hostname*, and a hostname is not a destination. The same name can
+resolve to a public address while it is being validated and to a link-local one when it is fetched
+— DNS rebinding, and the window is as wide as the queue between the two. A redirect is the same
+problem without the DNS: a public host answers `302 Location: http://10.0.0.5/`, and a check that
+ran once on the submitted URL never sees it.
+
+`Control` runs after resolution and before `connect(2)`, once per connection, and it is handed the
+numeric address. There is no gap between the decision and the use, and because every redirect hop
+opens its own connection, the hop that matters is checked on its own terms rather than inherited
+from the first one. `CheckRedirect` also caps the chain at five hops and re-checks the scheme, but
+that is belt-and-braces: the address check is what carries the property.
+
+The ranges refused are loopback, unspecified, RFC 1918 private and IPv6 unique-local, link-local
+unicast and multicast (which is how `169.254.169.254` is caught — by range, not by a hardcoded
+address), all multicast, carrier-grade NAT `100.64.0.0/10` (Alibaba Cloud's metadata endpoint lives
+at `100.100.100.200`), and the reserved/documentation/benchmarking blocks. Addresses are `Unmap`ed
+first, because `::ffff:127.0.0.1` is a legal way to write loopback that none of the IPv6 predicates
+would otherwise match.
+
+**What the failure says.** Blocking the connection stops the request; it does not stop the *answer*
+leaking. The worker used to store `err.Error()` in the run's `error_message`, and `run.html` renders
+that column. Left alone, the report page would still distinguish "connection refused" (nothing is
+listening there) from a read timeout (a firewall ate it) from "blocked" (that address is internal) —
+three different answers that together map a private network, just more slowly than `nmap` would.
+
+So `internal/mrf` returns a `*FetchError` carrying two strings: `Public`, which goes in the database
+and onto the page, and the wrapped `Err`, which goes to the structured log. Every network-level
+failure collapses to one `Public` message. The HTTP status of a response that did arrive is kept,
+because once the filter is in place a response can only have come from a host the user could have
+fetched themselves, and "your URL returns 403" is the most useful thing this app can tell someone
+whose MRF sits behind a login. `internal/validation`'s `publicFetchMessage` is the one place the two
+halves are pulled apart, and it defaults to a fixed string for any error that is not a `*FetchError`
+— so a failure path added later has to opt in to being shown rather than opt out of leaking.
+
+**Two deliberate omissions.** The port is not restricted to 80/443: a hospital publishing on `:8443`
+is plausible, and with private addresses already refused, an unusual port on a public host buys an
+attacker nothing they could not get from their own machine. And the client ignores `HTTP_PROXY` /
+`HTTPS_PROXY`, which `http.DefaultTransport` would honour. With a proxy in the path every connection
+dials the proxy, so `Control` would be inspecting the proxy's address while the proxy resolved and
+reached the real target — the filter would pass everything and protect nothing. Dropping proxy
+support makes that visible instead of silent; a deployment that needs one has to put the equivalent
+rule in its egress policy.
+
+`ALLOW_PRIVATE_MRF_ADDRESSES=true` turns the filter off, and defaults to false. It exists because
+loopback is exactly where a test server lives — `internal/validation`'s end-to-end test serves its
+fixture from `httptest` on 127.0.0.1 — and because pointing local dev at a file server on localhost
+is the same shape. It should never be set anywhere untrusted users can add a hospital.
+
 ## Auth
 
 Magic-link email only — no passkeys. See `AUTH.md` for the full flow and why this project doesn't

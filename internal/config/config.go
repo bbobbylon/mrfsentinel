@@ -58,6 +58,19 @@ type Config struct {
 	// FetchTimeout bounds how long downloading + validating one MRF is
 	// allowed to take before the background job is marked failed.
 	FetchTimeout time.Duration
+
+	// AllowPrivateMRFAddresses turns off the check that refuses to download
+	// an MRF from an address that is not on the public internet — loopback,
+	// RFC 1918, link-local (which includes the cloud metadata endpoint at
+	// 169.254.169.254), and friends. See internal/mrf/fetch.go.
+	//
+	// It defaults to false and should stay false anywhere untrusted users
+	// can add a hospital, because the MRF URL is theirs to choose and this
+	// server would happily fetch whatever it can reach on their behalf. The
+	// escape hatch exists for local development against a file server on
+	// localhost, and for internal/validation's end-to-end test, whose
+	// fixture is served by httptest on 127.0.0.1.
+	AllowPrivateMRFAddresses bool
 }
 
 // Load reads Config from environment variables, applying the defaults noted
@@ -97,6 +110,12 @@ func Load() (Config, error) {
 	}
 	cfg.FetchTimeout = time.Duration(fetchTimeoutMinutes) * time.Minute
 
+	allowPrivate, err := getEnvBool("ALLOW_PRIVATE_MRF_ADDRESSES", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AllowPrivateMRFAddresses = allowPrivate
+
 	return cfg, nil
 }
 
@@ -127,4 +146,27 @@ func getEnvInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("config: %s must be an integer, got %q: %w", key, v, err)
 	}
 	return n, nil
+}
+
+// getEnvBool is getEnv for boolean settings, accepting the spellings
+// strconv.ParseBool does (1/t/T/TRUE/true/True and the false equivalents).
+//
+// It follows getEnvInt in erroring on an unparseable value rather than
+// falling back, and the reason is sharper here than it is for an integer.
+// The only boolean setting is ALLOW_PRIVATE_MRF_ADDRESSES, which disables a
+// security control; if "yes" or "on" quietly became the default false, an
+// operator who meant to enable it for local dev would be left debugging a
+// fetch that keeps failing, and — far worse, if the mistake ever ran the
+// other way — nobody would notice a control that had silently switched off.
+// Refusing to boot names the typo instead.
+func getEnvBool(key string, fallback bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("config: %s must be true or false, got %q: %w", key, v, err)
+	}
+	return b, nil
 }

@@ -63,7 +63,7 @@ command.
 ### 1. Every declaration carries a doc comment
 
 Every top-level `func`, `type`, `const`, and `var` — exported *and* unexported, including test
-helpers — has a doc comment. Coverage is currently **229/229**. Keep it there when adding code.
+helpers — has a doc comment. Coverage is currently **260/260**. Keep it there when adding code.
 
 Comments in this codebase explain **how a thing relates to the rest of the system**, not what the
 next line does. They routinely: name the caller, point at the file that holds the other half of a
@@ -148,6 +148,15 @@ contradicts SRS.md means SRS.md needs updating in the same change.
   separate check a caller could forget.
 - Sign-in must not reveal whether an address has an account.
 - All SQL uses bound parameters. No string-concatenated queries, ever.
+- The MRF URL is user-supplied, so `internal/mrf` refuses to dial a non-public address. The check
+  lives in a `net.Dialer.Control` hook — at dial time, on the resolved address — **not** on the URL
+  at submit time, because a submit-time check cannot see DNS rebinding or a redirect. Don't move it
+  "earlier for clarity". `ALLOW_PRIVATE_MRF_ADDRESSES` disables it and is for local dev and tests
+  only.
+- A failed fetch must not describe this server's network. `internal/mrf` returns a `*FetchError`
+  with a `Public` message for the database and the page, and the wrapped `Err` for the log; every
+  network-level failure shares one `Public` string, so the report page can't be used to tell which
+  internal hosts are listening. Never put `err.Error()` into `MarkRunErrored`.
 
 ### 9. Template gotcha
 

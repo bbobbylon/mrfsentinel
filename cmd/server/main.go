@@ -78,7 +78,7 @@ func run(logger *slog.Logger) error {
 
 	st := store.NewStore(db)
 	mailer := auth.Mailer{Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom}
-	worker := validation.NewWorker(st, cfg.MaxMRFBytes, cfg.FetchTimeout, logger)
+	worker := validation.NewWorker(st, cfg.MaxMRFBytes, cfg.FetchTimeout, cfg.AllowPrivateMRFAddresses, logger)
 
 	handlers, err := web.NewHandlers(st, mailer, worker, cfg, logger)
 	if err != nil {

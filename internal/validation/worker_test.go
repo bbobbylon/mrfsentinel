@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,8 +121,14 @@ func newOwnedHospital(t *testing.T, s *store.Store, mrfURL string) (store.User, 
 // newTestWorker builds a Worker with generous limits and a silent logger.
 // The logger is discarded rather than routed to t.Log because the worker
 // logs from its own goroutine, which can outlive the test that started it.
+//
+// allowPrivateAddr is true here because every fixture below is served by
+// httptest, which listens on 127.0.0.1 — production's dial-time filter (see
+// internal/mrf/fetch.go) would refuse every one of them. That is the filter
+// working, so the test that pins it, TestWorker_RefusesAPrivateAddress,
+// builds its Worker directly with false rather than through this helper.
 func newTestWorker(s *store.Store) *Worker {
-	return NewWorker(s, 8<<20, 30*time.Second, slog.New(slog.DiscardHandler))
+	return NewWorker(s, 8<<20, 30*time.Second, true, slog.New(slog.DiscardHandler))
 }
 
 // awaitTerminalRun polls until the run reaches a terminal status, which is
@@ -279,5 +287,124 @@ func TestWorker_RecordsUnreachableHost(t *testing.T) {
 	}
 	if finished.ErrorMessage == "" {
 		t.Error("a failed run carries no error message")
+	}
+}
+
+// TestWorker_RefusesAPrivateAddress is the regression guard for the SSRF
+// this package used to have: with the production setting, an MRF URL
+// pointing at an address only this server can reach must fail without the
+// request ever being made.
+//
+// The httptest server here stands in for anything on the internal network —
+// a metadata endpoint, an admin port, a database's HTTP interface. It
+// records whether it was reached, and that flag is the real assertion: a run
+// marked failed proves the user saw an error, but only handlerRan proves no
+// bytes were sent. The two are different outcomes, and an implementation
+// that fetched first and complained afterwards would pass the first check.
+func TestWorker_RefusesAPrivateAddress(t *testing.T) {
+	s := newTestStore(t)
+
+	// atomic because the handler and the assertion below are on different
+	// goroutines — and if the filter ever regressed they would genuinely run
+	// concurrently, which should fail this test rather than trip -race.
+	var handlerRan atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerRan.Store(true)
+		_, _ = io.WriteString(w, sampleMRF)
+	}))
+	t.Cleanup(srv.Close)
+
+	user, hospital := newOwnedHospital(t, s, srv.URL+"/internal.json")
+	run, err := s.CreateValidationRun(context.Background(), hospital.ID)
+	if err != nil {
+		t.Fatalf("CreateValidationRun failed: %v", err)
+	}
+
+	// false, unlike newTestWorker: this is the one test that wants the
+	// production filter switched on.
+	worker := NewWorker(s, 8<<20, 30*time.Second, false, slog.New(slog.DiscardHandler))
+	worker.RunAsync(hospital, run.ID)
+	finished := awaitTerminalRun(t, s, run.ID, user.ID)
+
+	if handlerRan.Load() {
+		t.Error("the loopback server was actually reached — the address filter did not stop the request")
+	}
+	if finished.Status != store.RunFailed {
+		t.Errorf("run status = %q, want %q for a loopback MRF URL", finished.Status, store.RunFailed)
+	}
+	if finished.OverallPassed != nil {
+		t.Error("a blocked run still recorded an OverallPassed verdict")
+	}
+}
+
+// TestWorker_DoesNotLeakTransportErrorsToTheUser pins the other half of the
+// same fix. Blocking the connection stops the request; it does not by itself
+// stop the *answer* leaking, because the stored error_message is rendered on
+// the run page. If a refused connection and a blocked address produced
+// visibly different text, that page would still report on the internal
+// network — slower than a real port scan, but just as conclusive.
+//
+// Both URLs below therefore have to produce the same message, and neither
+// may name an address, a port, or a Go network error.
+func TestWorker_DoesNotLeakTransportErrorsToTheUser(t *testing.T) {
+	s := newTestStore(t)
+
+	// Started and immediately closed, so the port is allocated but nothing
+	// is listening: this is the "connection refused" case.
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+
+	// Still running, so this one is refused by the address filter rather
+	// than by the network.
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, sampleMRF)
+	}))
+	t.Cleanup(blocked.Close)
+
+	// The two cases need opposite settings to reach opposite code paths.
+	// "refused" has to actually dial to be refused, and the filter would
+	// otherwise intercept a loopback address before the network saw it — so
+	// it runs with the filter off, which is the only way to get a genuine
+	// transport error out of a machine with no public host that refuses
+	// connections. "blocked" runs with the filter on.
+	cases := []struct {
+		name         string
+		url          string
+		allowPrivate bool
+	}{
+		{"refused", closedURL, true},
+		{"blocked", blocked.URL, false},
+	}
+
+	messages := make(map[string]string, len(cases))
+	for _, tc := range cases {
+		name := tc.name
+		user, hospital := newOwnedHospital(t, s, tc.url+"/mrf.json")
+		run, err := s.CreateValidationRun(context.Background(), hospital.ID)
+		if err != nil {
+			t.Fatalf("CreateValidationRun failed: %v", err)
+		}
+
+		NewWorker(s, 8<<20, 30*time.Second, tc.allowPrivate, slog.New(slog.DiscardHandler)).RunAsync(hospital, run.ID)
+		finished := awaitTerminalRun(t, s, run.ID, user.ID)
+
+		if finished.Status != store.RunFailed {
+			t.Fatalf("%s: run status = %q, want %q", name, finished.Status, store.RunFailed)
+		}
+		if finished.ErrorMessage == "" {
+			t.Fatalf("%s: a failed run carries no error message, leaving the report page with nothing to show", name)
+		}
+		for _, leak := range []string{"127.0.0.1", "[::1]", "dial tcp", "connection refused", "connectex"} {
+			if strings.Contains(strings.ToLower(finished.ErrorMessage), strings.ToLower(leak)) {
+				t.Errorf("%s: error message shown to the user contains %q: %q", name, leak, finished.ErrorMessage)
+			}
+		}
+		messages[name] = finished.ErrorMessage
+	}
+
+	if messages["refused"] != messages["blocked"] {
+		t.Errorf("a refused connection and a blocked address produce different messages, which tells the user which internal hosts are listening:\n refused: %q\n blocked: %q",
+			messages["refused"], messages["blocked"])
 	}
 }

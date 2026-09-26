@@ -106,6 +106,9 @@ Requirement IDs are stable and referenced elsewhere in this document.
 | FR-3.7 | A file that parses correctly and then becomes malformed partway through must still produce a report covering the rows read up to that point, with the parse error recorded alongside. A partial report is required behavior, not a degraded mode. |
 | FR-3.8 | Every terminal outcome, including an internal failure to save results, must be written to the run's status. A run must never remain visibly in progress after its worker has stopped. |
 | FR-3.9 | A run's results — summary, hospital-level checks, item-level checks — must be persisted atomically. |
+| FR-3.10 | An MRF may only be downloaded from a publicly routable address. A URL that resolves to loopback, a private (RFC 1918) or unique-local range, link-local space (which includes the cloud instance-metadata endpoint at 169.254.169.254), carrier-grade NAT, or any other reserved range must fail the run without the request being sent. The check is made against the resolved address at the moment the connection is opened, and therefore applies to every redirect hop as well as the original URL. It may be disabled for local development with `ALLOW_PRIVATE_MRF_ADDRESSES=true`, which defaults to false. |
+| FR-3.11 | A run may follow at most five redirects. |
+| FR-3.12 | The error message shown for a failed run must not reveal anything about this server's own network. Every network-level failure — refused, unresolvable, timed out, or blocked by FR-3.10 — reports the same text; the HTTP status of a response that did arrive may be shown, since by FR-3.10 it can only have come from a host the user could reach themselves. |
 
 ### FR-4 — The compliance checklist
 
@@ -184,8 +187,10 @@ Requirement IDs are stable and referenced elsewhere in this document.
 | NFR-2.6 | All SQL uses bound parameters; no query is assembled by string concatenation. | Met. |
 | NFR-2.7 | All user-supplied and file-supplied content is rendered through `html/template`, which escapes contextually. | Met. |
 | NFR-2.8 | Outbound fetching is bounded in both size and time (FR-3.6). | Met. |
-| NFR-2.9 | Rate limiting on sign-in requests. | **NOT BUILT.** Nothing limits how many links can be requested for an address. Documented rather than implied. |
-| NFR-2.10 | SMTP credentials for a production relay. | **NOT BUILT.** `SendMail` is called with nil auth, which suits Mailhog and local relays only. Flagged in DEPLOY.md. |
+| NFR-2.9 | The MRF URL is user-supplied, so outbound fetching must not be usable as a proxy into the network this server runs in (CWE-918, server-side request forgery). | Met — dial-time address filtering, FR-3.10. This was a real defect, found by a security review of the code on 2026-09-25 and fixed the same day; before the fix any signed-up user could point a hospital at `http://169.254.169.254/…` and read the outcome. |
+| NFR-2.10 | A failed fetch must not become an oracle for what is listening on the internal network. | Met — FR-3.12. The full error is kept in the structured log, which is not user-facing. |
+| NFR-2.11 | Rate limiting on sign-in requests. | **NOT BUILT.** Nothing limits how many links can be requested for an address. Documented rather than implied. |
+| NFR-2.12 | SMTP credentials for a production relay. | **NOT BUILT.** `SendMail` is called with nil auth, which suits Mailhog and local relays only. Flagged in DEPLOY.md. |
 
 ### 4.3 Reliability
 
@@ -292,7 +297,12 @@ These are stated here so they are not mistaken for oversights:
    when it reaches `standard_charge_information`.
 5. **No notifications, no scheduled re-checking, no multi-user organizations, no export.** Every
    check is manually triggered by its owner and read in the browser.
-6. **This is not an official compliance determination.** It reports what a file contains against a
+6. **Fetching through an HTTP proxy is not supported.** The MRF downloader ignores `HTTP_PROXY`
+   and `HTTPS_PROXY`, because the FR-3.10 address filter inspects the address actually dialed — with
+   a proxy in the path that is the proxy, and the filter would pass every request while the proxy
+   reached the real target. A deployment that must fetch through a proxy has to enforce the
+   equivalent rule in the proxy's own egress policy.
+7. **This is not an official compliance determination.** It reports what a file contains against a
    documented checklist. It cannot speak for CMS.
 
 ### 7.4 Resource
